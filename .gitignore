@@ -1,0 +1,32 @@
+# Ignorar tudo por padrão
+/*
+/arduino/*
+/resources/*
+/resources/app_src/*
+/resources/app_src/blockly-core/*
+/resources/app_src/blockly-core/msg/*
+
+# --- Incluir explicitamente o que criamos / modificamos ---
+
+# Scripts de patch e teste
+!patch_asar.js
+!test_app.js
+!.gitignore
+
+# Arquivos fonte modificados
+!resources/
+!resources/app_src/
+!resources/app_src/app.compressed.js
+!resources/app_src/blockly-core/
+!resources/app_src/blockly-core/msg/
+!resources/app_src/blockly-core/msg/scratch_msgs.js
+
+# Exemplos pt-BR (pasta nova, não existia no original)
+!arduino/
+!arduino/blocks_examples/
+!arduino/blocks_examples/pt-BR/
+
+# Exemplos originais (já existem no app, não precisam de controle de versão)
+arduino/blocks_examples/en/
+arduino/blocks_examples/zh-cn/
+arduino/blocks_examples/zh-tw/
