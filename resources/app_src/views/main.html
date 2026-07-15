@@ -421,7 +421,16 @@
 	<!-- <script type="module" src="../src/app.js"></script> -->
 	<!-- <script type="text/javascript" src="../app.bundle.js"></script> -->
 	<script type="text/javascript" src="../app.compressed.js"></script>
-	<!-- AstroGenius: Tab Manager + Auto-Save -->
+	<!--
+		AstroGenius extensions for MATRIXblock Mini R4:
+		  - Tab manager (multiple projects open simultaneously)
+		  - Auto-save (30s) + session recovery (localStorage)
+		  - Dirty-state indicator per tab
+		  - Keyboard shortcuts (Ctrl+S/O/T/W/Shift+S/Shift+N)
+		  - "Open file" always opens in a new tab
+		Strings are i18n-aware: defaults to English, uses pt-BR when
+		Blockly's current locale is 'pt-BR'.
+	-->
 	<script type="text/javascript">
 	(function () {
 		'use strict';
@@ -432,6 +441,49 @@
 		const SESSION_KEY = 'astro-session-v1';
 		const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
+		// --- i18n helper (English default + pt-BR fallback) ---
+		const STRINGS = {
+			en: {
+				untitled:         'Untitled',
+				newTab:           'New tab',
+				unsavedTitle:     'Unsaved changes',
+				unsavedText:      'The tab "%s" has unsaved changes. Close anyway?',
+				unsavedYes:       'Close without saving',
+				cancel:           'Cancel',
+				unsavedTooltip:   'Unsaved changes',
+				unsavedSuffix:    ' (unsaved)',
+				restoreTitle:     'Restore previous session?',
+				restoreText:      'Found %d tab(s) from the last session%s.',
+				restoreDirty:     ' <b>with unsaved changes</b>',
+				restoreYes:       'Restore',
+				restoreNo:        'Start fresh',
+			},
+			'pt-BR': {
+				untitled:         'Sem título',
+				newTab:           'Nova aba',
+				unsavedTitle:     'Alterações não salvas',
+				unsavedText:      'A aba "%s" tem alterações não salvas. Fechar mesmo assim?',
+				unsavedYes:       'Fechar sem salvar',
+				cancel:           'Cancelar',
+				unsavedTooltip:   'Alterações não salvas',
+				unsavedSuffix:    ' (não salvo)',
+				restoreTitle:     'Restaurar sessão anterior?',
+				restoreText:      'Encontramos %d aba(s) da última sessão%s.',
+				restoreDirty:     ' <b>com alterações não salvas</b>',
+				restoreYes:       'Restaurar',
+				restoreNo:        'Começar do zero',
+			},
+		};
+		function currentLocale() {
+			try {
+				const l = Blockly?.ScratchMsgs?.currentLocale_;
+				if (l && STRINGS[l]) return l;
+			} catch (e) {}
+			return 'en';
+		}
+		// Renamed to avoid shadowing conflicts with 'const t = ...' local vars inside methods.
+		function tr(key) { return STRINGS[currentLocale()][key] || STRINGS.en[key]; }
+
 		const TM = {
 			tabs: [], activeId: null, _nextId: 1,
 			_suppressOpen: false, _openInNewTab: false, _lastSaveText: '',
@@ -440,7 +492,7 @@
 			_newTab(name, path, xml) {
 				const t = {
 					id: this._nextId++,
-					name: name || 'Sem título',
+					name: name || tr('untitled'),
 					path: path || '',
 					xml: xml || null,
 					dirty: false,
@@ -478,7 +530,7 @@
 
 			newTab() {
 				this._saveXml();
-				const t = this._newTab('Sem título', '', null);
+				const t = this._newTab(tr('untitled'), '', null);
 				this._switchTo(t.id);
 			},
 
@@ -519,10 +571,10 @@
 				};
 				if (tab.dirty && typeof Swal !== 'undefined') {
 					Swal.fire({
-						title: 'Alterações não salvas',
-						text: 'A aba "' + tab.name + '" tem alterações não salvas. Fechar mesmo assim?',
+						title: tr('unsavedTitle'),
+						text: tr('unsavedText').replace('%s', tab.name),
 						icon: 'warning', showCancelButton: true,
-						confirmButtonText: 'Fechar sem salvar', cancelButtonText: 'Cancelar',
+						confirmButtonText: tr('unsavedYes'), cancelButtonText: tr('cancel'),
 					}).then((r) => { if (r.isConfirmed) doClose(); });
 				} else {
 					doClose();
@@ -564,10 +616,10 @@
 					const el = document.createElement('div');
 					el.className = 'astro-tab' + (tab.id === this.activeId ? ' astro-active' : '');
 					el.dataset.tabId = String(tab.id);
-					const name = tab.name || 'Sem título';
-					const dot = tab.dirty ? '<span class="astro-tab-dirty" title="Alterações não salvas">●</span>' : '';
+					const name = tab.name || tr('untitled');
+					const dot = tab.dirty ? '<span class="astro-tab-dirty" title="' + tr('unsavedTooltip') + '">●</span>' : '';
 					el.innerHTML = dot +
-						'<span class="astro-tab-name" title="' + name + (tab.dirty ? ' (não salvo)' : '') + '">' + name + '</span>' +
+						'<span class="astro-tab-name" title="' + name + (tab.dirty ? tr('unsavedSuffix') : '') + '">' + name + '</span>' +
 						'<button class="astro-tab-close" data-close-id="' + tab.id + '">×</button>';
 					bar.appendChild(el);
 				});
@@ -575,7 +627,7 @@
 				// New tab button (fresh element each render)
 				const btn = document.createElement('button');
 				btn.id = 'astro-new-tab-btn';
-				btn.title = 'Nova aba';
+				btn.title = tr('newTab');
 				btn.textContent = '+';
 				bar.appendChild(btn);
 
@@ -612,11 +664,12 @@
 					if (!anyDirty && state.tabs.length === 1 && !anyPath) return false;
 					if (typeof Swal === 'undefined') return false;
 					Swal.fire({
-						title: 'Restaurar sessão anterior?',
-						html: 'Encontramos ' + state.tabs.length + ' aba(s) da última sessão'
-							+ (anyDirty ? ' <b>com alterações não salvas</b>' : '') + '.',
+						title: tr('restoreTitle'),
+						html: tr('restoreText')
+							.replace('%d', state.tabs.length)
+							.replace('%s', anyDirty ? tr('restoreDirty') : ''),
 						icon: 'question', showCancelButton: true,
-						confirmButtonText: 'Restaurar', cancelButtonText: 'Começar do zero',
+						confirmButtonText: tr('restoreYes'), cancelButtonText: tr('restoreNo'),
 					}).then((r) => {
 						if (!r.isConfirmed) { localStorage.removeItem(SESSION_KEY); return; }
 						this.tabs = [];
@@ -681,7 +734,7 @@
 					const t = this._newTab(initialName, '');
 					this.activeId = t.id;
 
-					// Intercept "Abrir arquivo": save current tab's XML BEFORE dialog opens
+					// Intercept "Open file" click: save current tab's XML BEFORE the dialog opens
 					const openBtn = document.querySelector('#openNavLink');
 					if (openBtn) {
 						openBtn.addEventListener('click', () => {
@@ -707,14 +760,14 @@
 							const xml = (typeof result.data.data === 'string') ? result.data.data : null;
 							this._loading = true;
 							if (shouldOpenNew) {
-								const name = p ? p.split(/[/\\]/).pop() : 'Sem título';
+								const name = p ? p.split(/[/\\]/).pop() : tr('untitled');
 								const t = this._newTab(name, p, xml);
 								this.activeId = t.id;
 							} else {
 								const tab = this._active();
 								if (tab) {
 									tab.path = p;
-									tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título';
+									tab.name = p ? p.split(/[/\\]/).pop() : tr('untitled');
 									if (xml) tab.xml = xml;
 									tab.dirty = false;
 								}

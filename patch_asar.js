@@ -1,3 +1,17 @@
+/*
+ * Surgical asar patcher for MATRIXblock Mini R4.
+ *
+ * Rebuilds app.asar from app.asar.bak by:
+ *   1. keeping the entire original data section intact (avoids issues with
+ *      native modules that live in app.asar.unpacked/ referenced by offsets);
+ *   2. appending patched files at the end;
+ *   3. updating the offsets/sizes for those files in the header JSON;
+ *   4. rewriting the pickle header (Chromium Pickle format, 4-byte aligned).
+ *
+ * To patch a file, drop the modified copy under app_src/ mirroring its path
+ * inside the archive, then add it to the PATCHES array below.
+ */
+
 const fs = require('fs');
 const path = require('path');
 
@@ -5,7 +19,7 @@ const BACKUP   = 'C:/matrixblock-r4/resources/app.asar.bak';
 const OUT      = 'C:/matrixblock-r4/resources/app.asar';
 const SRC_DIR  = 'C:/matrixblock-r4/resources/app_src';
 
-// Files to patch: [asarPath, srcRelPath]
+// Files to patch: [pathInsideAsar, pathRelativeToSRC_DIR]
 const PATCHES = [
   ['app.compressed.js',                'app.compressed.js'],
   ['blockly-core/msg/scratch_msgs.js', 'blockly-core/msg/scratch_msgs.js'],
