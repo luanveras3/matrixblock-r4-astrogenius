@@ -299,8 +299,8 @@ Blockly.Blocks['mini_MsetDIR'] = {
           "type": "field_dropdown",
           "name": "DIR",
           "options": [
-            ["Não", "false"],
-            ["Sim", "true"]
+            [AG("NO"), "false"],
+            [AG("YES"), "true"]
           ]
         }
       ],
@@ -483,8 +483,8 @@ Blockly.Blocks['mini_RCsetDIR'] = {
           "type": "field_dropdown",
           "name": "DIR",
           "options": [
-            ["Ligado", "false"],
-            ["Desligado", "true"]
+            [AG("ON"), "false"],
+            [AG("OFF"), "true"]
           ]
         }
       ],
@@ -619,8 +619,8 @@ Blockly.Blocks['mini_Mbrake'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],
@@ -720,8 +720,8 @@ Blockly.Blocks['mini_DIget'] = {
           "type": "field_dropdown",
           "name": "PIN2",
           "options": [
-            ["Esquerda", "L"],
-            ["Direita", "R"]
+            [AG("LEFT"), "L"],
+            [AG("RIGHT"), "R"]
           ]
         }
       ],
@@ -759,8 +759,8 @@ Blockly.Blocks['mini_DOset'] = {
           "type": "field_dropdown",
           "name": "PIN2",
           "options": [
-            ["Esquerda", "L"],
-            ["Direita", "R"]
+            [AG("LEFT"), "L"],
+            [AG("RIGHT"), "R"]
           ]
         },
         {
@@ -802,8 +802,8 @@ Blockly.Blocks['mini_AIget'] = {
           "type": "field_dropdown",
           "name": "PIN2",
           "options": [
-            ["Esquerda", "L"],
-            ["Direita", "R"]
+            [AG("LEFT"), "L"],
+            [AG("RIGHT"), "R"]
           ]
         }
       ],
@@ -1046,8 +1046,8 @@ Blockly.Blocks['mini_OLED_setTextColor'] = {
           "type": "field_dropdown",
           "name": "COLOR",
           "options": [
-            ["Branco", "SSD1306_WHITE"],
-            ["Preto", "SSD1306_BLACK"]
+            [AG("WHITE"), "SSD1306_WHITE"],
+            [AG("BLACK"), "SSD1306_BLACK"]
           ]
         }
       ],
@@ -1183,8 +1183,8 @@ Blockly.Blocks['mini_OLED_printEASY'] = {
           "type": "field_dropdown",
           "name": "SHOW",
           "options": [
-            ["Sim", "Yes"],
-            ["Não", "No"]
+            [AG("YES"), "Yes"],
+            [AG("NO"), "No"]
           ]
         }
       ],
@@ -1286,17 +1286,17 @@ Blockly.Blocks['mini_i2c_MXcolor_getColor'] = {
           "type": "field_dropdown",
           "name": "COLOR",
           "options": [
-            ["ID Cor", "ColorID"],
-            ["Vermelho", "R"],
-            ["Verde", "G"],
-            ["Azul", "B"],
-            ["Matiz", "H"],
-            ["Saturação", "S"],
-            ["Valor", "V"],
-            ["Ciano", "C"],
-            ["Magenta", "M"],
-            ["Amarelo", "Y"],
-            ["Preto (K)", "K"],
+            [AG("COLOR_ID"), "ColorID"],
+            [AG("RED"), "R"],
+            [AG("GREEN"), "G"],
+            [AG("BLUE"), "B"],
+            [AG("HUE"), "H"],
+            [AG("SATURATION"), "S"],
+            [AG("VALUE"), "V"],
+            [AG("CYAN"), "C"],
+            [AG("MAGENTA"), "M"],
+            [AG("YELLOW"), "Y"],
+            [AG("KEY"), "K"],
           ]
         }
       ],
@@ -1611,7 +1611,7 @@ Blockly.Blocks['mini_ps2_joy'] = {
         {
           "type": "field_dropdown",
           "name": "LR",
-          "options": [["Esquerda", "L"], ["Direita", "R"]]
+          "options": [[AG("LEFT"), "L"], [AG("RIGHT"), "R"]]
         },
         {
           "type": "field_dropdown",
@@ -2414,7 +2414,7 @@ Blockly.Blocks['mini_DHT11get'] = {
           "name": "DATA",
           "options": [
             ["Temp.", "readTemperature"],
-            ["Umidade", "readHumidity"]
+            [AG("HUMIDITY"), "readHumidity"]
           ]
         }
       ],
@@ -2675,14 +2675,14 @@ Blockly.Blocks['mini_i2c_MXcolorV3_getColor'] = {
           "type": "field_dropdown",
           "name": "COLOR",
           "options": [
-            ["ID Cor", "ColorID"],
-            ["Vermelho", "R"],
-            ["Verde", "G"],
-            ["Azul", "B"],
-            ["Transparente", "C"],
-            ["Matiz", "H"],
-            ["Saturação", "S"],
-            ["Valor", "V"],
+            [AG("COLOR_ID"), "ColorID"],
+            [AG("RED"), "R"],
+            [AG("GREEN"), "G"],
+            [AG("BLUE"), "B"],
+            [AG("CLEAR"), "C"],
+            [AG("HUE"), "H"],
+            [AG("SATURATION"), "S"],
+            [AG("VALUE"), "V"],
             
           ]
         }
@@ -3221,13 +3221,13 @@ Blockly.Blocks['mini_i2c_HTcolor_get'] = {
           "type": "field_dropdown",
           "name": "TYPE",
           "options": [
-            ["ID Cor", "ColorNumber"],
-            ["Vermelho", "R"],
-            ["Verde", "G"],
-            ["Azul", "B"],
-            ["Matiz", "H"],
-            ["Saturação", "S"],
-            ["Valor", "V"],
+            [AG("COLOR_ID"), "ColorNumber"],
+            [AG("RED"), "R"],
+            [AG("GREEN"), "G"],
+            [AG("BLUE"), "B"],
+            [AG("HUE"), "H"],
+            [AG("SATURATION"), "S"],
+            [AG("VALUE"), "V"],
           ]
         },
       ],
@@ -3271,24 +3271,24 @@ Blockly.Blocks['mini_ddc_setting'] = {
           "type": "field_dropdown",
           "name": "PINL_REV",
           "options": [
-            ["Não", "false"],
-            ["Sim", "true"]
+            [AG("NO"), "false"],
+            [AG("YES"), "true"]
           ]
         },
         {
           "type": "field_dropdown",
           "name": "PINR_REV",
           "options": [
-            ["Não", "false"],
-            ["Sim", "true"]
+            [AG("NO"), "false"],
+            [AG("YES"), "true"]
           ]
         },
         {
           "type": "field_dropdown",
           "name": "BRAKE_SETTLE",
           "options": [
-            ["Sim", "true"],
-            ["Não", "false"]
+            [AG("YES"), "true"],
+            [AG("NO"), "false"]
           ]
         }
       ],
@@ -3422,8 +3422,8 @@ Blockly.Blocks['mini_ddc_runFor'] = {
           "type": "field_dropdown",
           "name": "UNIT",
           "options": [
-            ["graus", "degrees"],
-            ["segundos", "seconds"]
+            [AG("DEGREES"), "degrees"],
+            [AG("SECONDS"), "seconds"]
           ],
         },
         {
@@ -3438,8 +3438,8 @@ Blockly.Blocks['mini_ddc_runFor'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],
@@ -3477,8 +3477,8 @@ Blockly.Blocks['mini_ddc_runFor_sync'] = {
           "type": "field_dropdown",
           "name": "UNIT",
           "options": [
-            ["graus", "degrees"],
-            ["segundos", "seconds"]
+            [AG("DEGREES"), "degrees"],
+            [AG("SECONDS"), "seconds"]
           ],
         },
         {
@@ -3493,8 +3493,8 @@ Blockly.Blocks['mini_ddc_runFor_sync'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],
@@ -3532,8 +3532,8 @@ Blockly.Blocks['mini_ddc_runFor_gyro'] = {
           "type": "field_dropdown",
           "name": "UNIT",
           "options": [
-            ["graus", "degrees"],
-            ["segundos", "seconds"]
+            [AG("DEGREES"), "degrees"],
+            [AG("SECONDS"), "seconds"]
           ],
         },
         {
@@ -3544,8 +3544,8 @@ Blockly.Blocks['mini_ddc_runFor_gyro'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],
@@ -3684,8 +3684,8 @@ Blockly.Blocks['mini_ddc_turn'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],
@@ -3726,8 +3726,8 @@ Blockly.Blocks['mini_ddc_turntwo'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],
@@ -3808,8 +3808,8 @@ Blockly.Blocks['mini_ddc_off'] = {
           "type": "field_dropdown",
           "name": "BrakeType",
           "options": [
-            ["Freio", "true"],
-            ["Livre", "false"]
+            [AG("BRAKE"), "true"],
+            [AG("COAST"), "false"]
           ]
         }
       ],

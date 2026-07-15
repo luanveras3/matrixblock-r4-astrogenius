@@ -168,9 +168,14 @@ renders to canvas), nav elements, and console errors.
 
 ## Contributing another locale
 
-To add e.g. Spanish (`es-ES`) support to AstroGenius-added strings,
-edit `resources/app_src/views/main.html` and add a new key to the
-`STRINGS` map inside the IIFE around line 445:
+Everything AstroGenius adds is designed to be extended with a new
+language by editing **three self-contained maps**, all with matching
+`en` / `pt-BR` keys as templates. Adding Spanish (`es-ES`), for
+example, is roughly a 10-minute exercise:
+
+**1. Tab bar, dialogs, banners** —
+   `resources/app_src/views/main.html`, `STRINGS` map inside the
+   tab-manager IIFE:
 
 ```javascript
 const STRINGS = {
@@ -180,13 +185,45 @@ const STRINGS = {
 };
 ```
 
-The `currentLocale()` helper resolves against
-`Blockly.ScratchMsgs.currentLocale_` and falls back to `en` for
-unknown locales. Rebuild with `node patch_asar.js`.
+**2. Modal HTML texts (About, MyBlock, Learning Resources, DFU)** —
+   same file, `MODAL_STRINGS` map immediately below:
 
-Adding a full Blockly locale (like the pt-BR one) requires appending
-a corresponding block to `blockly-core/msg/scratch_msgs.js` and
-adding the language to the dropdown in `app.compressed.js`.
+```javascript
+const MODAL_STRINGS = {
+  en:      { 'astro-about-title': 'About Software', ... },
+  'pt-BR': { 'astro-about-title': 'Sobre o Programa', ... },
+  'es-ES': { 'astro-about-title': 'Acerca del Software', ... },
+};
+```
+
+Both maps are re-applied on every language-dropdown click, so the
+switch is live — no reload needed.
+
+**3. Block dropdown labels (Brake/Coast, Left/Right, colors, etc.)** —
+   `resources/app_src/blockly-core/msg/scratch_msgs.js`, at the end
+   of the file:
+
+```javascript
+Blockly.ScratchMsgs.astroLocales = {
+  'en':    { BRAKE: 'Brake',  COAST: 'Coast', LEFT: 'Left', ... },
+  'pt-BR': { BRAKE: 'Freio',  COAST: 'Livre', LEFT: 'Esquerda', ... },
+  'es-ES': { BRAKE: 'Freno',  COAST: 'Libre', LEFT: 'Izquierda', ... },
+};
+```
+
+Blocks in `blockly-core/blocks/_mini.js` reference these labels via
+`AG('KEY')`, which reads the current locale off
+`Blockly.ScratchMsgs.currentLocale_` and falls back to English for
+any missing key.
+
+**Full block localization** (the ~300-key locale used by Blockly
+itself for setup/loop/if/repeat/etc.) is a separate exercise:
+append a `Blockly.ScratchMsgs.locales['es-ES'] = { ... }` block to
+the same `scratch_msgs.js` mirroring the pt-BR block. Also add the
+new language to the dropdown menu — see the pt-BR precedent in the
+obfuscated `app.compressed.js`.
+
+Rebuild with `node patch_asar.js` and relaunch. That's it.
 
 ---
 

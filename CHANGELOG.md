@@ -6,6 +6,40 @@ Based on upstream v1.0.8. Format loosely inspired by
 
 ---
 
+## [Unreleased]
+
+### Added
+- Bilingual C++ code mode (per-tab writable Monaco editor). Toggle
+  in the tab bar; SweetAlert confirmation on both directions.
+  Blockly workspace is visually locked while code mode is active.
+  Compile and Upload transparently use the manually edited code
+  because the app's compile method already reads directly from
+  Monaco's `getValue()`.
+- Export current sketch as `.ino` — new File-menu entry plus
+  `Ctrl+E` shortcut. Uses `<a download>` so Electron shows a native
+  save-as dialog with a filename derived from the tab.
+- Runtime i18n layer for all V3.1 modal HTML content plus the
+  Export menu label. A `MODAL_STRINGS` map with `en` defaults and
+  `pt-BR` overrides is re-applied after every language-dropdown
+  click, driven by clicks delegated on `#langDropDownMenu`.
+- Runtime i18n for the hardcoded dropdown labels inside
+  `blockly-core/blocks/_mini.js`. A new `AG('KEY')` helper
+  (installed on `window` from `scratch_msgs.js`) resolves the
+  active locale off `Blockly.ScratchMsgs.currentLocale_` and falls
+  back to English for unknown keys. All 69 previously-hardcoded
+  pt-BR labels are now `AG(...)` calls.
+- Contributor documentation: `README.md` now explains that adding
+  another locale (e.g. Spanish) is a three-map edit — `STRINGS`
+  and `MODAL_STRINGS` in `main.html`, `astroLocales` in
+  `scratch_msgs.js` — and takes about ten minutes.
+
+### Fixed
+- The Export-as-`.ino` menu label was only translated once at init
+  and never refreshed on locale change. It is now part of
+  `MODAL_STRINGS` and follows the current locale live.
+
+---
+
 ## [v3.2-stable] — 2026-07-15
 
 ### Changed

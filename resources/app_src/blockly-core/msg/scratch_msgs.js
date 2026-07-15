@@ -2383,3 +2383,55 @@ Blockly.ScratchMsgs.locales["pt-BR"] = {
         TITLE_6: "Carro Telecomandado MJ2",
     },
 };
+
+
+// -------------------------------------------------------------------
+// AstroGenius — bilingual dropdown labels for _mini.js
+//
+// The block file blocks/_mini.js hardcodes many display labels for
+// dropdown menus (Brake/Coast, Left/Right, colors, degrees/seconds,
+// etc.). To make those labels follow the current locale, _mini.js
+// references them through AG('KEY') instead of a literal string.
+//
+// Adding a new language (e.g. Spanish) is a one-object edit here:
+// just append another top-level key with a translation for every
+// entry present in the English block.  Missing keys fall back to
+// English.
+// -------------------------------------------------------------------
+Blockly.ScratchMsgs = Blockly.ScratchMsgs || {};
+Blockly.ScratchMsgs.astroLocales = {
+    'en': {
+        BRAKE: 'Brake',       COAST: 'Coast',
+        YES: 'Yes',           NO: 'No',
+        ON: 'On',             OFF: 'Off',
+        DEGREES: 'degrees',   SECONDS: 'seconds',
+        LEFT: 'Left',         RIGHT: 'Right',
+        WHITE: 'White',       BLACK: 'Black',
+        RED: 'Red',           GREEN: 'Green',        BLUE: 'Blue',
+        HUE: 'Hue',           SATURATION: 'Saturation', VALUE: 'Value',
+        CYAN: 'Cyan',         MAGENTA: 'Magenta',    YELLOW: 'Yellow',
+        KEY: 'Key',           CLEAR: 'Clear',
+        HUMIDITY: 'Humidity', COLOR_ID: 'ColorID',
+    },
+    'pt-BR': {
+        BRAKE: 'Freio',       COAST: 'Livre',
+        YES: 'Sim',           NO: 'Não',
+        ON: 'Ligado',         OFF: 'Desligado',
+        DEGREES: 'graus',     SECONDS: 'segundos',
+        LEFT: 'Esquerda',     RIGHT: 'Direita',
+        WHITE: 'Branco',      BLACK: 'Preto',
+        RED: 'Vermelho',      GREEN: 'Verde',        BLUE: 'Azul',
+        HUE: 'Matiz',         SATURATION: 'Saturação', VALUE: 'Valor',
+        CYAN: 'Ciano',        MAGENTA: 'Magenta',    YELLOW: 'Amarelo',
+        KEY: 'Preto (K)',     CLEAR: 'Transparente',
+        HUMIDITY: 'Umidade',  COLOR_ID: 'ID Cor',
+    },
+    // 'es-ES': { BRAKE: 'Freno', COAST: 'Libre', ... }  <- add other locales here
+};
+
+window.AG = function AG(key) {
+    var loc = (Blockly.ScratchMsgs && Blockly.ScratchMsgs.currentLocale_) || 'en';
+    var table = Blockly.ScratchMsgs.astroLocales[loc]
+             || Blockly.ScratchMsgs.astroLocales['en'];
+    return table[key] || Blockly.ScratchMsgs.astroLocales['en'][key] || key;
+};
