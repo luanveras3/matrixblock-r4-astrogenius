@@ -93,6 +93,28 @@
 				transition: color 0.5s;
 			}
 			#astro-autosave-indicator.saved { color: rgba(255,255,255,0.9); }
+			#astro-code-mode-btn {
+				padding: 0 14px; background: none; border: none;
+				color: rgba(255,255,255,0.7); font-size: 12px; font-weight: 600;
+				cursor: pointer; flex-shrink: 0; letter-spacing: 0.5px;
+				display: flex; align-items: center; gap: 5px;
+			}
+			#astro-code-mode-btn:hover { color: #fff; background: rgba(0,0,0,0.15); }
+			#astro-code-mode-btn.active {
+				background: #ffd166; color: #333;
+			}
+			#astro-code-mode-btn.active:hover { background: #ffdb85; }
+			#astro-code-mode-banner {
+				position: absolute; top: 85px; left: 0; right: 0;
+				background: rgba(255,209,102,0.95); color: #333;
+				padding: 4px 12px; font-size: 12px; text-align: center;
+				z-index: 4; border-bottom: 1px solid #d4a848;
+			}
+			.astro-blockly-locked {
+				pointer-events: none !important;
+				filter: grayscale(60%) opacity(0.55);
+				transition: filter 0.2s;
+			}
 			/* Push content-Div below nav (53px) + tab bar (32px) */
 			.mainContainer { display: flex !important; flex-direction: column !important; height: 100vh !important; }
 			.content-Div {
@@ -457,6 +479,21 @@
 				restoreDirty:     ' <b>with unsaved changes</b>',
 				restoreYes:       'Restore',
 				restoreNo:        'Start fresh',
+				codeModeLabel:    '&lt;/&gt; Code',
+				codeModeEnableTitle: 'Enable code mode?',
+				codeModeEnableText:
+					'The C++ editor becomes writable and you can edit it directly.\n\n' +
+					'The block workspace will be LOCKED — changing blocks will no longer ' +
+					'update the code. Compile and Upload will use what you type.\n\n' +
+					'You can turn code mode off later, but any manual C++ edits will be ' +
+					'discarded when you do (the code will be regenerated from blocks).',
+				codeModeEnableYes: 'Enable code mode',
+				codeModeDisableTitle: 'Disable code mode?',
+				codeModeDisableText:
+					'Your manual C++ edits will be discarded and the code will be ' +
+					'regenerated from the blocks. Continue?',
+				codeModeDisableYes: 'Discard edits',
+				codeModeBanner:   'Code mode active — blocks are locked. Compile/Upload uses your manual C++.',
 			},
 			'pt-BR': {
 				untitled:         'Sem título',
@@ -472,6 +509,21 @@
 				restoreDirty:     ' <b>com alterações não salvas</b>',
 				restoreYes:       'Restaurar',
 				restoreNo:        'Começar do zero',
+				codeModeLabel:    '&lt;/&gt; Código',
+				codeModeEnableTitle: 'Ativar modo código?',
+				codeModeEnableText:
+					'O editor C++ ficará editável e você poderá alterar o código diretamente.\n\n' +
+					'A área de blocos será BLOQUEADA — mexer nos blocos não vai mais ' +
+					'atualizar o código. Compilar e Enviar vão usar o que você digitou.\n\n' +
+					'Você pode desligar o modo código depois, mas suas edições manuais serão ' +
+					'perdidas (o código volta a ser gerado a partir dos blocos).',
+				codeModeEnableYes: 'Ativar modo código',
+				codeModeDisableTitle: 'Desativar modo código?',
+				codeModeDisableText:
+					'Suas edições manuais em C++ serão perdidas e o código será regenerado ' +
+					'a partir dos blocos. Continuar?',
+				codeModeDisableYes: 'Descartar edições',
+				codeModeBanner:   'Modo código ativo — blocos bloqueados. Compilar/Enviar usa seu C++ manual.',
 			},
 		};
 		function currentLocale() {
@@ -488,6 +540,10 @@
 			tabs: [], activeId: null, _nextId: 1,
 			_suppressOpen: false, _openInNewTab: false, _lastSaveText: '',
 			_loading: false,
+			// Code-mode support: cache the Monaco editor and its native setValue
+			// so we can wrap setValue as a no-op while a tab has code mode active
+			// (prevents Blockly's code regeneration from clobbering manual edits).
+			_editor: null, _origSetValue: null,
 
 			_newTab(name, path, xml) {
 				const t = {
@@ -496,6 +552,8 @@
 					path: path || '',
 					xml: xml || null,
 					dirty: false,
+					codeMode: false,
+					cppCode: null,
 				};
 				this.tabs.push(t);
 				return t;
@@ -522,6 +580,7 @@
 						activeIdx: Math.max(0, this.tabs.findIndex(t => t.id === this.activeId)),
 						tabs: this.tabs.map(t => ({
 							name: t.name, path: t.path, xml: t.xml, dirty: !!t.dirty,
+							codeMode: !!t.codeMode, cppCode: t.cppCode || null,
 						})),
 					};
 					localStorage.setItem(SESSION_KEY, JSON.stringify(state));
@@ -535,6 +594,12 @@
 			},
 
 			_switchTo(id) {
+				// Snapshot outgoing tab's C++ text so that when we return to it
+				// with codeMode still on, we get exactly what the user was editing.
+				const prev = this._active();
+				if (prev && prev.codeMode && this._editor) {
+					try { prev.cppCode = this._editor.getValue(); } catch (e) {}
+				}
 				this.activeId = id;
 				const t = this._active();
 				if (!t) return;
@@ -544,8 +609,106 @@
 					code: 0, msg: 'tab-switch',
 					data: { path: t.path, data: t.xml || EMPTY_WS }
 				});
-				setTimeout(() => { this._loading = false; }, 500);
+				setTimeout(() => {
+					this._loading = false;
+					this._applyCodeMode(t);
+				}, 500);
 				this._render();
+			},
+
+			// --- Code mode: make the Monaco C++ editor writable and freeze blocks ---
+
+			_getEditor() {
+				if (this._editor) return this._editor;
+				try {
+					if (typeof monaco !== 'undefined' && monaco.editor) {
+						const eds = monaco.editor.getEditors();
+						if (eds && eds.length) {
+							this._editor = eds[0];
+							this._origSetValue = eds[0].setValue.bind(eds[0]);
+						}
+					}
+				} catch (e) {}
+				return this._editor;
+			},
+
+			// Apply the tab's codeMode state to the editor and the Blockly workspace.
+			// Called on init, on tab switch, and after every toggle.
+			_applyCodeMode(tab) {
+				const ed = this._getEditor();
+				if (!ed || !tab) return;
+				const bly = document.querySelector('.blocklyDiv, .blocklySvg')?.closest('.injectionDiv, .content-Div');
+				const banner = document.querySelector('#astro-code-mode-banner');
+				if (tab.codeMode) {
+					// Push saved C++ into the editor before locking it
+					if (tab.cppCode != null) {
+						try { this._origSetValue(tab.cppCode); } catch (e) {}
+					}
+					try { ed.updateOptions({ readOnly: false }); } catch (e) {}
+					// Neutralize setValue so Blockly's code regeneration can't overwrite user edits
+					try { ed.setValue = function () { /* frozen while in code mode */ }; } catch (e) {}
+					if (bly) bly.classList.add('astro-blockly-locked');
+					if (!banner) {
+						const b = document.createElement('div');
+						b.id = 'astro-code-mode-banner';
+						b.textContent = tr('codeModeBanner');
+						document.body.appendChild(b);
+					} else {
+						banner.textContent = tr('codeModeBanner');
+					}
+				} else {
+					try { ed.updateOptions({ readOnly: true }); } catch (e) {}
+					try { ed.setValue = this._origSetValue; } catch (e) {}
+					if (bly) bly.classList.remove('astro-blockly-locked');
+					if (banner) banner.remove();
+					// Trigger a Blockly change so the app regenerates code into Monaco
+					try {
+						if (Blockly?.mainWorkspace) {
+							Blockly.mainWorkspace.fireChangeListener({ type: 'astro_regenerate' });
+						}
+					} catch (e) {}
+				}
+			},
+
+			toggleCodeMode() {
+				const tab = this._active();
+				if (!tab) return;
+				const ed = this._getEditor();
+				if (!ed) return;
+				if (!tab.codeMode) {
+					// Turning ON — warn about the trade-off
+					Swal.fire({
+						title: tr('codeModeEnableTitle'),
+						text: tr('codeModeEnableText'),
+						icon: 'warning', showCancelButton: true,
+						confirmButtonText: tr('codeModeEnableYes'),
+						cancelButtonText: tr('cancel'),
+					}).then((r) => {
+						if (!r.isConfirmed) return;
+						// Snapshot the block-generated code as the initial C++
+						try { tab.cppCode = ed.getValue(); } catch (e) {}
+						tab.codeMode = true;
+						this._applyCodeMode(tab);
+						this._render();
+						this._persistSession();
+					});
+				} else {
+					// Turning OFF — warn edits will be lost
+					Swal.fire({
+						title: tr('codeModeDisableTitle'),
+						text: tr('codeModeDisableText'),
+						icon: 'warning', showCancelButton: true,
+						confirmButtonText: tr('codeModeDisableYes'),
+						cancelButtonText: tr('cancel'),
+					}).then((r) => {
+						if (!r.isConfirmed) return;
+						tab.codeMode = false;
+						tab.cppCode = null;
+						this._applyCodeMode(tab);
+						this._render();
+						this._persistSession();
+					});
+				}
 			},
 
 			switchTo(id) {
@@ -640,12 +803,23 @@
 				}
 				bar.appendChild(ind);
 
+				// Code-mode toggle (fresh element each render)
+				const activeTab = this._active();
+				const cmBtn = document.createElement('button');
+				cmBtn.id = 'astro-code-mode-btn';
+				if (activeTab?.codeMode) cmBtn.classList.add('active');
+				cmBtn.innerHTML = tr('codeModeLabel');
+				bar.appendChild(cmBtn);
+
 				// Single delegated handler on the bar (replaces previous)
 				bar.onclick = (e) => {
 					const closeBtn = e.target.closest('[data-close-id]');
 					if (closeBtn) { this.closeTab(parseInt(closeBtn.dataset.closeId)); return; }
 					if (e.target.id === 'astro-new-tab-btn' || e.target.closest('#astro-new-tab-btn')) {
 						this.newTab(); return;
+					}
+					if (e.target.id === 'astro-code-mode-btn' || e.target.closest('#astro-code-mode-btn')) {
+						this.toggleCodeMode(); return;
 					}
 					const tabEl = e.target.closest('[data-tab-id]');
 					if (tabEl) this.switchTo(parseInt(tabEl.dataset.tabId));
