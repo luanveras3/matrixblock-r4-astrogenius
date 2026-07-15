@@ -69,6 +69,10 @@
 				border-bottom: 2px solid #fff; margin-bottom: -2px;
 			}
 			.astro-tab-name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+			.astro-tab-dirty {
+				color: #ffd166; font-size: 16px; line-height: 1;
+				margin-right: 2px; flex-shrink: 0;
+			}
 			.astro-tab-close {
 				background: none; border: none; color: inherit; font-size: 15px;
 				cursor: pointer; padding: 0; width: 18px; height: 18px;
@@ -430,12 +434,22 @@
 		const EMPTY_WS = '<xml xmlns="http://www.w3.org/1999/xhtml"><variables></variables></xml>';
 		const AUTO_SAVE_MS = 30000;
 
+		const SESSION_KEY = 'astro-session-v1';
+		const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+
 		const TM = {
 			tabs: [], activeId: null, _nextId: 1,
 			_suppressOpen: false, _openInNewTab: false, _lastSaveText: '',
+			_loading: false,
 
 			_newTab(name, path, xml) {
-				const t = { id: this._nextId++, name: name || 'Sem título', path: path || '', xml: xml || null };
+				const t = {
+					id: this._nextId++,
+					name: name || 'Sem título',
+					path: path || '',
+					xml: xml || null,
+					dirty: false,
+				};
 				this.tabs.push(t);
 				return t;
 			},
@@ -453,6 +467,20 @@
 				} catch (e) {}
 			},
 
+			_persistSession() {
+				try {
+					this._saveXml();
+					const state = {
+						savedAt: Date.now(),
+						activeIdx: Math.max(0, this.tabs.findIndex(t => t.id === this.activeId)),
+						tabs: this.tabs.map(t => ({
+							name: t.name, path: t.path, xml: t.xml, dirty: !!t.dirty,
+						})),
+					};
+					localStorage.setItem(SESSION_KEY, JSON.stringify(state));
+				} catch (e) {}
+			},
+
 			newTab() {
 				this._saveXml();
 				const t = this._newTab('Sem título', '', null);
@@ -464,10 +492,12 @@
 				const t = this._active();
 				if (!t) return;
 				this._suppressOpen = true;
+				this._loading = true;
 				ipcRenderer.emit('show-open-dialog', {}, {
 					code: 0, msg: 'tab-switch',
 					data: { path: t.path, data: t.xml || EMPTY_WS }
 				});
+				setTimeout(() => { this._loading = false; }, 500);
 				this._render();
 			},
 
@@ -481,18 +511,32 @@
 				if (this.tabs.length <= 1) return;
 				const idx = this.tabs.findIndex(t => t.id === id);
 				if (idx === -1) return;
-				const wasActive = this.activeId === id;
-				this.tabs.splice(idx, 1);
-				if (wasActive) {
-					this._switchTo(this.tabs[Math.max(0, idx - 1)].id);
+				const tab = this.tabs[idx];
+				const doClose = () => {
+					const wasActive = this.activeId === id;
+					this.tabs.splice(idx, 1);
+					if (wasActive) {
+						this._switchTo(this.tabs[Math.max(0, idx - 1)].id);
+					} else {
+						this._render();
+					}
+					this._persistSession();
+				};
+				if (tab.dirty && typeof Swal !== 'undefined') {
+					Swal.fire({
+						title: 'Alterações não salvas',
+						text: 'A aba "' + tab.name + '" tem alterações não salvas. Fechar mesmo assim?',
+						icon: 'warning', showCancelButton: true,
+						confirmButtonText: 'Fechar sem salvar', cancelButtonText: 'Cancelar',
+					}).then((r) => { if (r.isConfirmed) doClose(); });
 				} else {
-					this._render();
+					doClose();
 				}
 			},
 
 			_autoSave() {
 				const t = this._active();
-				if (!t || !t.path) return;
+				if (!t || !t.path) { this._persistSession(); return; }
 				document.querySelector('#saveNavLink')?.click();
 				const now = new Date();
 				const h = String(now.getHours()).padStart(2,'0');
@@ -501,6 +545,17 @@
 				this._lastSaveText = '💾 ' + h + ':' + m + ':' + s;
 				this._render();
 				setTimeout(() => { this._lastSaveText = ''; this._render(); }, 4000);
+			},
+
+			_markSaved() {
+				const t = this._active();
+				if (t) { t.dirty = false; this._render(); this._persistSession(); }
+			},
+
+			_markDirty() {
+				if (this._loading) return;
+				const t = this._active();
+				if (t && !t.dirty) { t.dirty = true; this._render(); }
 			},
 
 			_render() {
@@ -515,7 +570,9 @@
 					el.className = 'astro-tab' + (tab.id === this.activeId ? ' astro-active' : '');
 					el.dataset.tabId = String(tab.id);
 					const name = tab.name || 'Sem título';
-					el.innerHTML = '<span class="astro-tab-name" title="' + name + '">' + name + '</span>' +
+					const dot = tab.dirty ? '<span class="astro-tab-dirty" title="Alterações não salvas">●</span>' : '';
+					el.innerHTML = dot +
+						'<span class="astro-tab-name" title="' + name + (tab.dirty ? ' (não salvo)' : '') + '">' + name + '</span>' +
 						'<button class="astro-tab-close" data-close-id="' + tab.id + '">×</button>';
 					bar.appendChild(el);
 				});
@@ -548,6 +605,81 @@
 				};
 			},
 
+			_tryRestoreSession() {
+				try {
+					const raw = localStorage.getItem(SESSION_KEY);
+					if (!raw) return false;
+					const state = JSON.parse(raw);
+					if (!state?.tabs?.length) return false;
+					if (Date.now() - (state.savedAt || 0) > SESSION_MAX_AGE_MS) return false;
+					const anyDirty = state.tabs.some(t => t.dirty);
+					const anyPath = state.tabs.some(t => t.path);
+					if (!anyDirty && state.tabs.length === 1 && !anyPath) return false;
+					if (typeof Swal === 'undefined') return false;
+					Swal.fire({
+						title: 'Restaurar sessão anterior?',
+						html: 'Encontramos ' + state.tabs.length + ' aba(s) da última sessão'
+							+ (anyDirty ? ' <b>com alterações não salvas</b>' : '') + '.',
+						icon: 'question', showCancelButton: true,
+						confirmButtonText: 'Restaurar', cancelButtonText: 'Começar do zero',
+					}).then((r) => {
+						if (!r.isConfirmed) { localStorage.removeItem(SESSION_KEY); return; }
+						this.tabs = [];
+						state.tabs.forEach(st => {
+							const t = this._newTab(st.name, st.path, st.xml);
+							t.dirty = !!st.dirty;
+						});
+						const idx = Math.max(0, Math.min(state.activeIdx || 0, this.tabs.length - 1));
+						this.activeId = this.tabs[idx].id;
+						this._switchTo(this.activeId);
+					});
+					return true;
+				} catch (e) { return false; }
+			},
+
+			_setupDirtyTracking() {
+				const attach = () => {
+					if (typeof Blockly === 'undefined' || !Blockly.mainWorkspace) return false;
+					try {
+						Blockly.mainWorkspace.addChangeListener((e) => {
+							if (!e || !e.type) return;
+							// Ignore UI/viewport-only events
+							if (e.type === Blockly.Events.UI || e.type === 'viewport_change'
+								|| e.type === 'selected' || e.type === 'click' || e.type === 'drag') return;
+							this._markDirty();
+						});
+						return true;
+					} catch (e) { return false; }
+				};
+				if (!attach()) setTimeout(attach, 1500);
+			},
+
+			_setupShortcuts() {
+				window.addEventListener('keydown', (e) => {
+					if (!(e.ctrlKey || e.metaKey)) return;
+					const k = (e.key || '').toLowerCase();
+					if (k === 's' && !e.shiftKey) {
+						e.preventDefault();
+						(document.querySelector('#saveNavLink') || document.querySelector('#saveAsNavLink'))?.click();
+					} else if (k === 's' && e.shiftKey) {
+						e.preventDefault();
+						document.querySelector('#saveAsNavLink')?.click();
+					} else if (k === 'o') {
+						e.preventDefault();
+						document.querySelector('#openNavLink')?.click();
+					} else if (k === 't') {
+						e.preventDefault();
+						this.newTab();
+					} else if (k === 'w') {
+						e.preventDefault();
+						if (this.activeId != null) this.closeTab(this.activeId);
+					} else if (k === 'n' && e.shiftKey) {
+						e.preventDefault();
+						document.querySelector('#createNavLink')?.click();
+					}
+				}, true);
+			},
+
 			init() {
 				setTimeout(() => {
 					const initialName = document.querySelector('#currPrjsName')?.textContent?.trim() || 'Projeto 1';
@@ -555,7 +687,6 @@
 					this.activeId = t.id;
 
 					// Intercept "Abrir arquivo": save current tab's XML BEFORE dialog opens
-					// (otherwise app's own listener replaces the workspace before we can save)
 					const openBtn = document.querySelector('#openNavLink');
 					if (openBtn) {
 						openBtn.addEventListener('click', () => {
@@ -564,6 +695,14 @@
 						});
 					}
 
+					// Manual save clicks clear dirty flag
+					document.querySelector('#saveNavLink')?.addEventListener('click', () => {
+						setTimeout(() => this._markSaved(), 300);
+					});
+					document.querySelector('#saveAsNavLink')?.addEventListener('click', () => {
+						setTimeout(() => this._markSaved(), 300);
+					});
+
 					// Track real file opens
 					ipcRenderer.on('show-open-dialog', (_, result) => {
 						const shouldOpenNew = this._openInNewTab;
@@ -571,20 +710,21 @@
 						if (result?.code === 0 && result?.data && !this._suppressOpen) {
 							const p = result.data.path || '';
 							const xml = (typeof result.data.data === 'string') ? result.data.data : null;
+							this._loading = true;
 							if (shouldOpenNew) {
 								const name = p ? p.split(/[/\\]/).pop() : 'Sem título';
 								const t = this._newTab(name, p, xml);
 								this.activeId = t.id;
-								setTimeout(() => this._render(), 80);
 							} else {
 								const tab = this._active();
 								if (tab) {
 									tab.path = p;
 									tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título';
 									if (xml) tab.xml = xml;
+									tab.dirty = false;
 								}
-								setTimeout(() => this._render(), 80);
 							}
+							setTimeout(() => { this._loading = false; this._render(); this._persistSession(); }, 400);
 						}
 						this._suppressOpen = false;
 					});
@@ -596,8 +736,9 @@
 							if (tab) {
 								tab.path = result.data.path;
 								tab.name = result.data.path.split(/[/\\]/).pop();
+								tab.dirty = false;
 							}
-							setTimeout(() => this._render(), 80);
+							setTimeout(() => { this._render(); this._persistSession(); }, 80);
 						}
 					});
 
@@ -611,8 +752,17 @@
 						}).observe(nameEl, { childList: true, characterData: true, subtree: true });
 					}
 
+					this._setupDirtyTracking();
+					this._setupShortcuts();
+
+					// Persist on unload
+					window.addEventListener('beforeunload', () => this._persistSession());
+
 					setInterval(() => this._autoSave(), AUTO_SAVE_MS);
 					this._render();
+
+					// Offer to restore previous session
+					setTimeout(() => this._tryRestoreSession(), 800);
 				}, 2500);
 			}
 		};
