@@ -1,8 +1,8 @@
 # MATRIXblock Mini R4 — AstroGenius Fork
 
 Community-maintained fork of MATRIXblock Mini R4 v1.0.8 with quality-of-life
-improvements targeted at classroom use, developed by a Brazilian school
-(Escola Participação) that adopted the platform for STEM classes.
+improvements targeted at classroom use, developed by the AstroGenius Team
+(a Brazilian robotics team, maintainer: Luan Veras).
 
 Every change is applied surgically to the shipped `app.asar` (see
 [Rebuild strategy](#rebuild-strategy)) — the original binary is never
