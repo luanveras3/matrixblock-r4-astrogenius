@@ -53,7 +53,7 @@
 				display: flex; align-items: stretch; background: #008184;
 				border-bottom: 2px solid #006466; min-height: 32px;
 				overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
-				position: relative; z-index: 1050;
+				position: relative; z-index: 5;
 			}
 			#astro-tab-bar::-webkit-scrollbar { height: 3px; }
 			#astro-tab-bar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.3); }
@@ -516,7 +516,7 @@
 					el.dataset.tabId = String(tab.id);
 					const name = tab.name || 'Sem título';
 					el.innerHTML = '<span class="astro-tab-name" title="' + name + '">' + name + '</span>' +
-						'<button class="astro-tab-close" data-closeId="' + tab.id + '">×</button>';
+						'<button class="astro-tab-close" data-close-id="' + tab.id + '">×</button>';
 					bar.appendChild(el);
 				});
 
@@ -538,13 +538,13 @@
 
 				// Single delegated handler on the bar (replaces previous)
 				bar.onclick = (e) => {
-					const closeBtn = e.target.closest('[data-closeId]');
-					if (closeBtn) { this.closeTab(parseInt(closeBtn.dataset.closeid)); return; }
+					const closeBtn = e.target.closest('[data-close-id]');
+					if (closeBtn) { this.closeTab(parseInt(closeBtn.dataset.closeId)); return; }
 					if (e.target.id === 'astro-new-tab-btn' || e.target.closest('#astro-new-tab-btn')) {
 						this.newTab(); return;
 					}
-					const tabEl = e.target.closest('[data-tabId]');
-					if (tabEl) this.switchTo(parseInt(tabEl.dataset.tabid));
+					const tabEl = e.target.closest('[data-tab-id]');
+					if (tabEl) this.switchTo(parseInt(tabEl.dataset.tabId));
 				};
 			},
 
@@ -554,10 +554,14 @@
 					const t = this._newTab(initialName, '');
 					this.activeId = t.id;
 
-					// Intercept "Abrir arquivo" to open in new tab
+					// Intercept "Abrir arquivo": save current tab's XML BEFORE dialog opens
+					// (otherwise app's own listener replaces the workspace before we can save)
 					const openBtn = document.querySelector('#openNavLink');
 					if (openBtn) {
-						openBtn.addEventListener('click', () => { this._openInNewTab = true; });
+						openBtn.addEventListener('click', () => {
+							this._saveXml();
+							this._openInNewTab = true;
+						});
 					}
 
 					// Track real file opens
@@ -566,15 +570,19 @@
 						this._openInNewTab = false;
 						if (result?.code === 0 && result?.data && !this._suppressOpen) {
 							const p = result.data.path || '';
+							const xml = (typeof result.data.data === 'string') ? result.data.data : null;
 							if (shouldOpenNew) {
-								this._saveXml();
 								const name = p ? p.split(/[/\\]/).pop() : 'Sem título';
-								const t = this._newTab(name, p, null);
+								const t = this._newTab(name, p, xml);
 								this.activeId = t.id;
 								setTimeout(() => this._render(), 80);
 							} else {
 								const tab = this._active();
-								if (tab) { tab.path = p; tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título'; }
+								if (tab) {
+									tab.path = p;
+									tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título';
+									if (xml) tab.xml = xml;
+								}
 								setTimeout(() => this._render(), 80);
 							}
 						}
