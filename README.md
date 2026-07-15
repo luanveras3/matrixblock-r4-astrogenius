@@ -9,7 +9,10 @@ Every change is applied surgically to the shipped `app.asar` (see
 modified in-place, and native modules (serialport, DFU) are left
 untouched in `app.asar.unpacked/`.
 
-Latest stable release: **v3.2-stable** (tagged in git).
+Latest stable git tag: **v3.2-stable**. Additional features on the
+default branch since that tag: C++ code mode, `.ino` export, and a
+fully bilingual runtime i18n layer (see [CHANGELOG.md](CHANGELOG.md)
+for the unreleased entries).
 
 ---
 
@@ -64,24 +67,55 @@ Latest stable release: **v3.2-stable** (tagged in git).
   (the app's own IPC listener runs before ours and would otherwise
   replace the workspace before we could snapshot)
 
-### Keyboard shortcuts
-| Shortcut       | Action                      |
-| -------------- | --------------------------- |
-| `Ctrl+S`       | Save                        |
-| `Ctrl+Shift+S` | Save As                     |
-| `Ctrl+O`       | Open (into a new tab)       |
-| `Ctrl+T`       | New tab                     |
-| `Ctrl+W`       | Close active tab            |
-| `Ctrl+Shift+N` | New project                 |
+### C++ code mode (writable Monaco editor)
+- Toggle button `</> Code` in the tab bar (per-tab state).
+- When enabled, the Monaco C++ editor becomes writable and the block
+  workspace is visually locked (grayscale + `pointer-events: none`),
+  with a yellow banner across the top explaining the state.
+- Monaco's `setValue` is wrapped as a no-op while code mode is active
+  so Blockly's automatic code regeneration cannot clobber the user's
+  manual edits.
+- Compile and Upload transparently use the manually edited C++ —
+  the app's own compile method already reads directly from
+  `editor.getValue()`, so no IPC interception is needed.
+- Per-tab `codeMode` and `cppCode` are persisted in the session
+  snapshot; switching between tabs restores each one's mode.
+- Both directions surface a SweetAlert confirmation (enabling warns
+  about frozen blocks; disabling warns manual edits will be discarded).
 
-### Bilingual UI strings
-- All AstroGenius-added user-facing strings (tab tooltips, dialogs,
-  "unsaved" markers) are keyed through a small `STRINGS` map with
-  `en` (default) and `pt-BR` overrides
-- Locale is read from `Blockly.ScratchMsgs.currentLocale_` at
-  render time — switching languages at runtime refreshes the strings
-- Adding another locale is a one-object edit inside the tab-manager
-  IIFE in `views/main.html`
+### Export current sketch as .ino
+- New File-menu entry "Export as .ino" plus `Ctrl+E` shortcut.
+- Reads `editor.getValue()` from Monaco (works in both block mode
+  and code mode) and triggers a native save dialog via a hidden
+  `<a download>` element that Electron intercepts.
+- Suggested filename is derived from the active tab's path or name
+  (`Project.mbr4` → `Project.ino`), stripping the extension and
+  sanitizing non-word characters.
+
+### Keyboard shortcuts
+| Shortcut       | Action                              |
+| -------------- | ----------------------------------- |
+| `Ctrl+S`       | Save                                |
+| `Ctrl+Shift+S` | Save As                             |
+| `Ctrl+O`       | Open (into a new tab)               |
+| `Ctrl+T`       | New tab                             |
+| `Ctrl+W`       | Close active tab                    |
+| `Ctrl+E`       | Export current sketch as `.ino`     |
+| `Ctrl+Shift+N` | New project                         |
+
+### Fully bilingual UI (English default + pt-BR overrides)
+- Every added user-facing string — tab bar, dialogs, banners,
+  modal HTML content, block dropdown labels — resolves against the
+  current locale at render time and falls back to English for any
+  missing key.
+- Three self-contained maps hold the translations
+  (`STRINGS`, `MODAL_STRINGS`, `astroLocales`); see
+  [Contributing another locale](#contributing-another-locale).
+- HTML defaults are English; pt-BR overrides are applied by an
+  early `applyModalStrings()` call so pt-BR users don't see an
+  English flash on start-up.
+- Language switches from the app's own dropdown are picked up live
+  via a delegated click listener — no reload needed.
 
 ---
 
@@ -144,9 +178,15 @@ concatenates the patched files after it.
 ## How to test / rebuild
 
 Prerequisites:
-- Node.js (tested on Node 24)
-- `npm install` in the repo root pulls Playwright and
-  `@electron/asar`
+- Node.js 20 or newer (tested on Node 24 on Windows 11).
+- `npm install` in the repo root — the upstream `package.json`
+  already lists Playwright; `@electron/asar` is a small extra
+  dependency that `patch_asar.js` uses.
+- The original `resources/app.asar.bak` (an untouched copy of the
+  shipped v1.0.8 `app.asar`) must exist next to the patch script.
+  If it's missing, copy the pristine `app.asar` from a fresh
+  install to `app.asar.bak` **before** running the patcher —
+  otherwise you'll rebuild against an already-modified archive.
 
 Rebuild the asar from the backup + your local patches:
 
@@ -154,7 +194,12 @@ Rebuild the asar from the backup + your local patches:
 node patch_asar.js
 ```
 
-Launch the app and verify it opens with all features working:
+The script prints each patched file's original offset/size and the
+new offset/size, plus a set of pickle-header verification bytes at
+the end. If those match the "expected" values, the rebuild is sound.
+
+Launch the app (`MATRIXblock Mini R4.exe` on Windows) and verify it
+opens. For an automated sanity check:
 
 ```
 node test_app.js
@@ -162,7 +207,8 @@ node test_app.js
 
 The Playwright smoke test opens the app, waits for full
 initialization, and asserts on: window title, canvas count (Blockly
-renders to canvas), nav elements, and console errors.
+renders to canvas), nav elements, and console errors. Exits with
+"STATUS: OK" on success.
 
 ---
 

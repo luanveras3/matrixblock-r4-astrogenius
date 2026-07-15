@@ -1,4 +1,4 @@
-# Ignorar tudo por padrão
+# Ignore everything by default (whitelist model)
 /*
 /arduino/*
 /resources/*
@@ -8,18 +8,18 @@
 /resources/app_src/blockly-core/blocks/*
 /resources/app_src/views/*
 
-# --- Incluir explicitamente o que criamos / modificamos ---
+# --- Explicitly include the files we create or patch ---
 
-# Scripts de patch e teste
+# Patch and test scripts
 !patch_asar.js
 !test_app.js
 !.gitignore
 
-# Documentação
+# Documentation
 !README.md
 !CHANGELOG.md
 
-# Arquivos fonte modificados
+# Patched source files
 !resources/
 !resources/app_src/
 !resources/app_src/app.compressed.js
@@ -31,12 +31,12 @@
 !resources/app_src/views/
 !resources/app_src/views/main.html
 
-# Exemplos pt-BR (pasta nova, não existia no original)
+# New pt-BR block examples (folder did not exist in the upstream app)
 !arduino/
 !arduino/blocks_examples/
 !arduino/blocks_examples/pt-BR/
 
-# Exemplos originais (já existem no app, não precisam de controle de versão)
+# Upstream examples (already shipped in the app; no need to version them)
 arduino/blocks_examples/en/
 arduino/blocks_examples/zh-cn/
 arduino/blocks_examples/zh-tw/

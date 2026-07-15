@@ -37,6 +37,16 @@ Based on upstream v1.0.8. Format loosely inspired by
 - The Export-as-`.ino` menu label was only translated once at init
   and never refreshed on locale change. It is now part of
   `MODAL_STRINGS` and follows the current locale live.
+- Static HTML defaults for the About / MyBlock / Learning Resources /
+  Firmware Update modals were hardcoded in pt-BR. English users saw
+  Portuguese text flash for ~2.5 s until the tab-manager init timer
+  fired `applyModalStrings()`. HTML defaults are now English (the
+  neutral fallback), and a new `bootI18nEarly()` helper runs
+  `applyModalStrings()` at DOMContentLoaded plus two catch-up timers
+  (400 ms, 1500 ms) so pt-BR users get their locale applied before
+  Blockly finishes bootstrapping.
+- `.gitignore` comments translated to English for consistency with
+  the rest of the codebase.
 
 ---
 
