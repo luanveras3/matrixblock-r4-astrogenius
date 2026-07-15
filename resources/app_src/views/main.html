@@ -368,6 +368,12 @@
 									<li>
 										<hr class="dropdown-divider">
 									</li>
+									<li><a class="dropdown-item" id="astroExportInoLink"><i class="bi bi-filetype-txt"></i>
+										<span id="astroExportInoLabel">Exportar como .ino</span></a>
+									</li>
+									<li>
+										<hr class="dropdown-divider">
+									</li>
 									<li><a class="dropdown-item" id="dfuNavLink"><i class="bi bi-lightning-charge"></i>
 										<span id="dfuButton">&nbsp;Update FW</span></a>
 									</li>
@@ -448,7 +454,9 @@
 		  - Tab manager (multiple projects open simultaneously)
 		  - Auto-save (30s) + session recovery (localStorage)
 		  - Dirty-state indicator per tab
-		  - Keyboard shortcuts (Ctrl+S/O/T/W/Shift+S/Shift+N)
+		  - Keyboard shortcuts (Ctrl+S/O/T/W/E/Shift+S/Shift+N)
+		  - Code mode toggle (per-tab writable Monaco editor)
+		  - Export current sketch as .ino
 		  - "Open file" always opens in a new tab
 		Strings are i18n-aware: defaults to English, uses pt-BR when
 		Blockly's current locale is 'pt-BR'.
@@ -494,6 +502,9 @@
 					'regenerated from the blocks. Continue?',
 				codeModeDisableYes: 'Discard edits',
 				codeModeBanner:   'Code mode active — blocks are locked. Compile/Upload uses your manual C++.',
+				exportInoLabel:   'Export as .ino',
+				exportInoOK:      'Exported to: %s',
+				exportInoFail:    'Failed to export .ino file.',
 			},
 			'pt-BR': {
 				untitled:         'Sem título',
@@ -524,6 +535,9 @@
 					'a partir dos blocos. Continuar?',
 				codeModeDisableYes: 'Descartar edições',
 				codeModeBanner:   'Modo código ativo — blocos bloqueados. Compilar/Enviar usa seu C++ manual.',
+				exportInoLabel:   'Exportar como .ino',
+				exportInoOK:      'Exportado para: %s',
+				exportInoFail:    'Falha ao exportar arquivo .ino.',
 			},
 		};
 		function currentLocale() {
@@ -667,6 +681,38 @@
 							Blockly.mainWorkspace.fireChangeListener({ type: 'astro_regenerate' });
 						}
 					} catch (e) {}
+				}
+			},
+
+			// Export the current Monaco editor content as an .ino file.
+			// Uses an HTMLAnchorElement with the `download` attribute — Electron
+			// intercepts this via its default download behavior and shows a native
+			// save dialog. Works whether the tab is in block mode (exports the
+			// generated code) or code mode (exports the manually edited C++).
+			exportIno() {
+				const ed = this._getEditor();
+				if (!ed) return;
+				try {
+					const cpp = ed.getValue() || '';
+					// Suggest a filename based on the active tab's name or path
+					const tab = this._active();
+					let base = 'sketch';
+					if (tab) {
+						const src = (tab.path && tab.path.split(/[\\/]/).pop()) || tab.name || 'sketch';
+						base = src.replace(/\.(mbr4|ino|cpp)$/i, '').replace(/[^\w.-]/g, '_') || 'sketch';
+					}
+					const blob = new Blob([cpp], { type: 'text/plain' });
+					const url  = URL.createObjectURL(blob);
+					const a    = document.createElement('a');
+					a.href = url;
+					a.download = base + '.ino';
+					document.body.appendChild(a);
+					a.click();
+					setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+				} catch (e) {
+					if (typeof Swal !== 'undefined') {
+						Swal.fire({ title: tr('exportInoFail'), icon: 'error' });
+					}
 				}
 			},
 
@@ -898,6 +944,9 @@
 					} else if (k === 'n' && e.shiftKey) {
 						e.preventDefault();
 						document.querySelector('#createNavLink')?.click();
+					} else if (k === 'e') {
+						e.preventDefault();
+						this.exportIno();
 					}
 				}, true);
 			},
@@ -924,6 +973,12 @@
 					document.querySelector('#saveAsNavLink')?.addEventListener('click', () => {
 						setTimeout(() => this._markSaved(), 300);
 					});
+
+					// Export .ino menu entry + label
+					const exportLink = document.querySelector('#astroExportInoLink');
+					if (exportLink) exportLink.addEventListener('click', () => this.exportIno());
+					const exportLabel = document.querySelector('#astroExportInoLabel');
+					if (exportLabel) exportLabel.textContent = tr('exportInoLabel');
 
 					// Track real file opens
 					ipcRenderer.on('show-open-dialog', (_, result) => {
