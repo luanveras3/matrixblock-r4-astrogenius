@@ -5,6 +5,7 @@
 /resources/app_src/*
 /resources/app_src/blockly-core/*
 /resources/app_src/blockly-core/msg/*
+/resources/app_src/views/*
 
 # --- Incluir explicitamente o que criamos / modificamos ---
 
@@ -20,6 +21,8 @@
 !resources/app_src/blockly-core/
 !resources/app_src/blockly-core/msg/
 !resources/app_src/blockly-core/msg/scratch_msgs.js
+!resources/app_src/views/
+!resources/app_src/views/main.html
 
 # Exemplos pt-BR (pasta nova, não existia no original)
 !arduino/

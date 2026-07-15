@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+		<meta name="viewport" content="width=device-width, user-scalable=no">
+		<title>Matrix Block</title>
+		<!--Plugins-->
+		<link rel="stylesheet" type="text/css" href="../assets/plugins/bootstrap/bootstrap.min.css" />
+		<link rel="stylesheet" type="text/css" href="../assets/plugins/bootstrap-icons/bootstrap-icons.min.css" />
+		<link rel="stylesheet" type="text/css" href="../assets/plugins/sweetalert2/sweetalert2-bootstrap-4.min.css" />
+		<link rel="stylesheet" type="text/css" href="../assets/plugins/nice-select2/nice-select2.css" />
+		<!-- <link rel="stylesheet" type="text/css" href="../assets/plugins/bootstrap5-toggle/bootstrap5-toggle.min.css" /> -->
+		<link rel="stylesheet" type="text/css" href="../assets/plugins/driverjs/driver.min.css">
+		<script>window.$ = window.jQuery = require("jquery");</script>
+		<script type="text/javascript" src="../assets/plugins/bootstrap/bootstrap.bundle.min.js"></script>
+		<script type="text/javascript" src="../assets/plugins/sweetalert2/sweetalert2.all.min.js"></script>
+		<script type="text/javascript" src="../assets/plugins/nice-select2/nice-select2.js"></script>
+		<!-- <link rel="preconnect" href="https://fonts.googleapis.com"> -->
+		<!-- <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin> -->
+		<!-- <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@100;300;400;500;700;900&display=swap" rel="stylesheet"> -->
+		<!-- <script type="text/javascript" src="../assets/plugins/bootstrap5-toggle/bootstrap5-toggle.ecmas.min.js"></script> -->
+		<script type="text/javascript" src="../assets/plugins/chart/chart.js"></script>
+		<script type="text/javascript" src="../assets/plugins/driverjs/driver.js.iife.js"></script>
+		<!--_Toolbox.xml Loading, blocking process to make sure XML loaded before Blockly init-->
+		<script>
+			$.ajax({
+			  url: "../blockly-core/_Toolbox.xml",
+			  type: "GET",
+			  dataType: "text",
+			  async: false, // blocking process
+			  success: function (data) {
+			    $("head").append(data);
+			  },
+			  error: function () {
+			    alert("Failed to Load Blockly ToolBox XML!");
+			  },
+			});
+		</script>
+		<!--Blockly Core-->
+		<script src="../blockly-core/blockly.js"></script>
+		<!-- <script src="../blockly-core/blockly_compressed_vertical.js"></script> -->
+		<script src="../blockly-core/vertical_extensions.js"></script>
+		<script src="../blockly-core/msg/scratch_msgs.js"></script>
+		<!--App Style-->
+		<link rel="stylesheet" type="text/css" href="../assets/css/style.css" />
+		<!--Blocks and Generators Auto Loading-->
+		<script src="../blockly-core/arduino.js"></script>
+		<script src="../blockly-core/_BlocksAutoLoad.js"></script>
+		<!-- AstroGenius: Tab bar & auto-save styles -->
+		<style>
+			#astro-tab-bar {
+				display: flex; align-items: stretch; background: #0d1117;
+				border-bottom: 2px solid #006466; min-height: 30px;
+				overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
+			}
+			#astro-tab-bar::-webkit-scrollbar { height: 3px; }
+			#astro-tab-bar::-webkit-scrollbar-thumb { background: #006466; }
+			.astro-tab {
+				display: flex; align-items: center; padding: 0 6px 0 12px;
+				font-size: 12px; color: #8b949e; cursor: pointer;
+				border-right: 1px solid #21262d; white-space: nowrap;
+				gap: 5px; user-select: none; min-width: 80px; max-width: 200px;
+			}
+			.astro-tab:hover { background: #161b22; color: #c9d1d9; }
+			.astro-tab.astro-active {
+				background: #008184; color: #fff;
+				border-bottom: 2px solid #00d4d7; margin-bottom: -2px;
+			}
+			.astro-tab-name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+			.astro-tab-close {
+				background: none; border: none; color: inherit; font-size: 15px;
+				cursor: pointer; padding: 0; width: 18px; height: 18px;
+				display: flex; align-items: center; justify-content: center;
+				border-radius: 3px; opacity: 0.4; flex-shrink: 0; line-height: 1;
+			}
+			.astro-tab:hover .astro-tab-close,
+			.astro-tab.astro-active .astro-tab-close { opacity: 0.8; }
+			.astro-tab-close:hover { opacity: 1 !important; background: rgba(255,80,80,0.2); color: #ff6b6b; }
+			#astro-new-tab-btn {
+				padding: 0 14px; background: none; border: none; color: #8b949e;
+				font-size: 20px; cursor: pointer; flex-shrink: 0; line-height: 30px;
+			}
+			#astro-new-tab-btn:hover { color: #fff; background: #161b22; }
+			#astro-autosave-indicator {
+				margin-left: auto; padding: 0 12px; font-size: 11px; color: #2ea04426;
+				display: flex; align-items: center; flex-shrink: 0;
+				transition: color 0.5s;
+			}
+			#astro-autosave-indicator.saved { color: #3fb950; }
+			/* Ensure layout fills window correctly with the tab bar added */
+			.mainContainer { display: flex !important; flex-direction: column !important; height: 100vh !important; }
+			.content-Div { flex: 1 !important; min-height: 0 !important; overflow: hidden; }
+		</style>
+	</head>
+
+	<!-- MyBlock Procedure Modal -->
+	<div class="modal" id="myBlock_modal" tabindex="-1" data-bs-backdrop='static' data-bs-focus='false'
+		data-bs-keyboard='false'>
+		<div class="modal-dialog modal-lg">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title">My Block Builder</h5>
+					<button type="button" id="myblock_closeIcon" class="btn-close"></button>
+				</div>
+				<div class="modal-body">
+					<div class="myBlock_modal-workspace" id="editor-block-workspace"></div>
+					<div class="myBlock_modal-btns">
+						<div class="myBlock_modal-btn" id="myblock_add0">
+							<img class="myBlock_modal-btn-img" src="../assets/img/icon--num-input.svg" alt="" />
+							<div id="myblock_addNumBtn" class="myBlock_modal-btn-text">Number Input</div>
+							<!-- 數字輸入 -->
+						</div>
+						<div class="myBlock_modal-btn" id="myblock_add3">
+							<img class="myBlock_modal-btn-img" src="../assets/img/icon--text-input.svg" alt="" />
+							<div id="myblock_addStringBtn" class="myBlock_modal-btn-text">Text Input</div>
+							<!-- 文字輸入 -->
+						</div>
+						<div class="myBlock_modal-btn" id="myblock_add1">
+							<img class="myBlock_modal-btn-img" src="../assets/img/icon--boolean-input.svg" alt="" />
+							<div id="myblock_addBoolBtn" class="myBlock_modal-btn-text">Logic Input</div>
+							<!-- 邏輯輸入 -->
+						</div>
+						<div class="myBlock_modal-btn" id="myblock_add2">
+							<img class="myBlock_modal-btn-img" src="../assets/img/icon--label.svg" alt="" />
+							<div id="myblock_addTagBtn" class="myBlock_modal-btn-text">Add Tag</div>
+							<!-- 增加標籤 -->
+						</div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" id="myblock_sureAddbtn" class="btn btn-primary">Finish</button>
+					<button type="button" id="myblock_closebtn" class="btn btn-secondary">Cancel</button>
+				</div>
+			</div>
+		</div>
+	</div>
+	
+  <!--About software Modal -->
+	<div class="modal fade" id="about_modal" tabindex="-1">
+		<div class="modal-dialog">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title">About Software</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+				</div>
+				<div class="modal-body">
+					<div class="text-center">
+						<img src="../assets/img/logo.png" class="img-fluid">
+						<br>
+						<br>
+					</div>
+					<p class="blockquote-footer">
+						MATRIXblock transforms visual coding into C++ code for students, evolving from Scratch 3 blocks to bridge
+						graphical and text-based programming seamlessly.
+					</p>
+					<hr>
+					<a style="font-size:0.8em;" href="packages_licenses.html" target="_blank"><small>These software may be included
+					in this
+					product.</small></a>
+					<br>
+					<a style="font-size:0.8em;" href="eula.html" target="_blank"><small>By using this software, you agree to these
+					Terms of Use.</small></a>
+					<div class="text-center">
+						<hr>
+						<p style="color: #6c757d; font-size:0.8em;"><script>document.write(new Date().getFullYear())</script> © K K INTELLIGENT TECHNOLOGY INC., All rights reserved.</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	
+  <!--Example resources Modal -->
+	<div class="modal fade" id="example_Modal" tabindex="-1">
+		<div class="modal-dialog modal-lg">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title">Learning Resources</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+				</div>
+				<div class="modal-body text-center">
+					<div class="container-fluid">
+						<div class="row g-3">
+							<!-- 卡片 1 -->
+							<div class="col-4">
+								<div class="card example_card h-100" exFile="Example1.mbr4" exFile="0" exPDF="Example1.pdf">
+									<img src="../assets/img/example_1.jpg" class="card-img-top">
+									<div class="card-body">
+										<h6 class="card-text"><span id="exampleTitle_1">Software Introduction</span></h6>
+									</div>
+								</div>
+							</div>
+							<!-- 卡片 2 -->
+							<div class="col-4">
+								<div class="card example_card h-100" exFile="0" exPDF="Example2.pdf">
+									<img src="../assets/img/example_2.jpg" class="card-img-top">
+									<div class="card-body">
+										<h6 class="card-text"><span id="exampleTitle_2">MATRIX R4 Guidebook</span></h6>
+									</div>
+								</div>
+							</div>
+							<!-- 卡片 3 -->
+							<div class="col-4">
+								<div class="card example_card h-100" exFile="0" exPDF="Example3.pdf">
+									<img src="../assets/img/example_3.jpg" class="card-img-top">
+									<div class="card-body">
+										<h6 class="card-text"><span id="exampleTitle_3">Structural Components GuideBook</span></h6>
+									</div>
+								</div>
+							</div>
+							
+							<!-- 卡片 4 -->
+							<div class="col-4">
+								<div class="card example_card h-100" exFile="Example4.mbr4" exPDF="Example4.pdf">
+									<img src="../assets/img/example_4.jpg" class="card-img-top">
+									<div class="card-body">
+										<h6 class="card-text"><span id="exampleTitle_4">Basic Car</span></h6>
+									</div>
+								</div>
+							</div>
+							<!-- 卡片 5 -->
+							<div class="col-4">
+								<div class="card example_card h-100" exFile="Example5.mbr4" exPDF="Example5.pdf">
+									<img src="../assets/img/example_5.jpg" class="card-img-top">
+									<div class="card-body">
+										<h6 class="card-text"><span id="exampleTitle_5">Basic Car 2</span></h6>
+									</div>
+								</div>
+							</div>
+							<!-- 卡片 6 -->
+							<div class="col-4">
+								<div class="card example_card h-100" exFile="Example6.mbr4" exPDF="Example6.pdf">
+									<img src="../assets/img/example_6.jpg" class="card-img-top">
+									<div class="card-body">
+										<h6 class="card-text"><span id="exampleTitle_6">MJ2 Car</span></h6>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div class="modal-footer text-center">
+					<p style="font-size:0.8em;">For more Unit Plans and Example, please visit: 
+						<a style="color: blue; cursor: pointer;"
+						onclick="require('electron').shell.openExternal('https://www.matrixrobotics.com/stem-lab/')">
+							matrixrobotics.com
+						</a>
+					</p>
+				</div>
+			</div>
+		</div>
+	</div>
+	
+  <!-- FW Update Modal -->
+	<div class="modal fade" id="fwUpdateModal" tabindex="-1" aria-labelledby="fwUpdateModalLabel" aria-hidden="true">
+		<div class="modal-dialog modal-lg">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="fwUpdateModalLabel">Mini R4 Firmware Update Utility</h5>
+					<button type="button" id="dfu_closeIcon" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body">
+					<div class="row ">
+						<div class="col-md-3 text-center">
+							<button id="dfu_scanBtn" class="btn btn-primary btn-sm">1. Scan DFU Device</button>
+						</div>
+						<div class="col-md-8 ms-auto">
+							<select id="dfu_devSelect" class="form-control form-control-sm">
+								<option value="">Please Scan First.</option>
+							</select>
+						</div>
+						<div class="col-md-1">
+							<button id="dfu_help" class="btn btn-outline-primary btn-sm"
+								onclick="require('electron').shell.openExternal('https://www.matrixrobotics.com/sw-support/firmware-dfudevice')"><i
+								class="bi bi-question-square"></i></button>
+						</div>
+					</div>
+					<hr>
+					<div class="row">
+						<div class="col-md-3 text-center">
+							<button id="dfu_selectFirmwareBtn" class="btn btn-primary btn-sm">2. Select Firmware</button>
+						</div>
+						<div class="col-md-5 ms-auto">
+							<input type="text" class="form-control form-control-sm" id="dfu_fwPath" name="dfu_fwPath" disabled readonly>
+						</div>
+						<div class="col-md-3 text-center">
+							<span id="dfu_fw_latest_ver">*Latest FW Ver: N/A</span>
+						</div>
+						<div class="col-md-1">
+							<button id="dfu_fwdownload" class="btn btn-outline-primary btn-sm"
+								onclick="require('electron').shell.openExternal('https://www.matrixrobotics.com/sw-support/firmware-download')"><i
+								class="bi bi-cloud-arrow-down"></i></button>
+						</div>
+					</div>
+					<hr>
+					<div class="modalCmdOutput" id="dfu_cmdOutput">
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-success" id="dfu_run">3. Update Firmware</button>
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="dfu_close">Close</button>
+				</div>
+			</div>
+		</div>
+	</div>
+	
+  <body ondragstart="return false">
+		<div class="mainContainer">
+			<nav class="navbar navbar-expand navbar-dark" style="background-color: #008184; z-index: 1049">
+				<div class="container-fluid">
+					<a class="navbar-brand me-0"><img src="../assets/img/nav-logo.png" width="156px" height="53px" /></a>
+					<div class="navbar-nav">
+						<div class="btn-group">
+							<li class="nav-item dropdown">
+								<a class="nav-link active dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false"><i
+									class="bi bi-globe-asia-australia"></i></a>
+								<ul class="dropdown-menu" id="langDropDownMenu">
+									<!-- Append by js -->
+								</ul>
+							</li>
+							<li class="nav-item dropdown">
+								<a class="nav-link active dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+								<i class="bi bi-folder-fill"></i><span id="fileMenu"></span>
+								</a>
+								<ul class="dropdown-menu" id="fileDropDownMenu">
+									<li><a class="dropdown-item" id="createNavLink"><i class="bi bi-file-earmark"></i>
+										<span id="createButton">New File</span></a>
+									</li>
+									<li><a class="dropdown-item" id="openNavLink"><i class="bi bi-folder2-open"></i>
+										<span id="openButton">Open File</span></a>
+									</li>
+									<li><a class="dropdown-item" id="saveNavLink"><i class="bi bi-floppy2-fill"></i>
+										<span id="saveButton">Save File</span></a>
+									</li>
+									<li></li>
+									<a class="dropdown-item" id="saveAsNavLink" href="#" class="nav-link"><i
+										class="bi bi-floppy"></i>
+									<span id="saveAsButton">&nbsp;另存新檔</span></a>
+									</li>
+									<li>
+										<hr class="dropdown-divider">
+									</li>
+									<li><a class="dropdown-item" id="dfuNavLink"><i class="bi bi-lightning-charge"></i>
+										<span id="dfuButton">&nbsp;Update FW</span></a>
+									</li>
+									<li><a class="dropdown-item" id="helpNavLink"><i class="bi bi-question-circle"></i>
+										<span id="helpButton">Help</span></a>
+									</li>
+									<li><a class="dropdown-item" id="webNavLink"
+										onclick="require('electron').shell.openExternal('https://www.matrixrobotics.com/')">
+										<i class="bi bi-house"></i><span id="webButton">&nbsp; Matrix Homepage</span></a>
+									</li>
+									<li><a class="dropdown-item" id="aboutNavLink"><i class="bi bi-info-circle"></i>
+										<span id="aboutButton">&nbsp; About</span></a>
+									</li>
+									<!-- <li><a class="dropdown-item" id="debugNavLink"><i class="bi bi-info-circle"></i>
+										<span id="debugButton">&nbsp; Debugger</span></a>
+										</li> -->
+								</ul>
+							</li>
+							<li class="nav-item"><a class="nav-link active" id="exampleNavLink" title="Learning Resources">
+								<i class="bi bi-book"></i><span id="exMenu"></span></a>
+							</li>
+							<li class="nav-item"><a class="nav-link active" id="supportNavLink" title="Blocks API Reference"
+								href="eula.html" target="_blank" onclick="window.open(this.href , '_blank', 'width=950,height=680'); return false;">
+								<i class="bi bi-question-square"></i><span id="supportMenu"></span></a>
+							</li>
+						</div>
+					</div>
+					<div class="navbar-nav ms-auto">
+						<span id="currPrjsName" class="badge text-bg-light">Project.mbr4</span>
+					</div>
+					<div class="navbar-nav ms-auto" id="boardNav">
+						<a class="nav-link d-flex align-items-center active" id="AiNavLink" title="MATRIX AI Assistant (Online)" onclick="require('electron').shell.openExternal('https://www.matrixrobotics.com/sw-support')">
+						<i class="bi bi-command"></i><span id="AiButton"></span></a>
+						<a class="nav-link d-flex align-items-center active" id="compileNavLink" title="Compile">
+						<i class="bi bi-check-circle"></i><span id="compileButton"></span></a>
+						<a class="nav-link d-flex align-items-center active" id="uploadNavLink" title="Upload">
+						<i class="bi bi-arrow-right-circle"></i><span id="uploadButton"></span></a>&nbsp;
+						<!-- <select id="comSelect"></select> -->
+						<li class="nav-item" style="width: 175px;">
+							<a class="nav-link deviceStNavLink" id="deviceStNavLink" href="#">
+							<i class="bi bi-robot"></i> <span id="deviceStNavLink_lable">No Device</span><span id="deviceStNavLink_devname"></span>
+							</a>
+						</li>
+						<div class="deviceDropdown-content" id="deviceDropdown-content">
+							<a id="autoDiscoveryLable">Auto Discovery?</a>
+							<input id="autoDiscoveryChkBox" type="checkbox">
+							<br>
+							<div style="display: flex; align-items: center;">
+								<a id="manualSelectLable">Manual Select: </a>
+								<!-- <select id="comSelect" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 175px;"></select> -->
+								<!-- <select id="comSelect" style="width: 250px; display: inline-block; white-space: nowrap; overflow: hidden; font-size: 0.85rem;"></select> -->
+								<select id="comSelect"></select>
+							</div>
+						</div>
+					</div>
+				</div>
+			</nav>
+			<!-- AstroGenius Tab Bar (populated by JS) -->
+			<div id="astro-tab-bar"></div>
+			<div class="content-Div">
+				<div class="editor-Div">
+					<div class="editor-collapse"><i class="bi bi-arrow-right-short"></i></div>
+				</div>
+				<div class="editor-slider-bar"></div>
+				<div class="control-Div">
+					<div class="code-Div"></div>
+					<div class="console-Div"></div>
+				</div>
+			</div>
+		</div>
+	</body>
+	<!-- App js -->
+	<!-- <script type="module" src="../src/app.js"></script> -->
+	<!-- <script type="text/javascript" src="../app.bundle.js"></script> -->
+	<script type="text/javascript" src="../app.compressed.js"></script>
+	<!-- AstroGenius: Tab Manager + Auto-Save -->
+	<script type="text/javascript">
+	(function () {
+		'use strict';
+		const { ipcRenderer } = require('electron');
+		const EMPTY_WS = '<xml xmlns="http://www.w3.org/1999/xhtml"><variables></variables></xml>';
+		const AUTO_SAVE_MS = 30000;
+
+		const TM = {
+			tabs: [], activeId: null, _nextId: 1,
+			_suppressOpen: false, _lastSaveText: '',
+
+			_newTab(name, path, xml) {
+				const t = { id: this._nextId++, name: name || 'Sem título', path: path || '', xml: xml || null };
+				this.tabs.push(t);
+				return t;
+			},
+			_active() { return this.tabs.find(t => t.id === this.activeId) || null; },
+
+			_saveXml() {
+				const t = this._active();
+				if (!t) return;
+				try {
+					if (typeof Blockly !== 'undefined' && Blockly.mainWorkspace) {
+						t.xml = Blockly.Xml.domToText(Blockly.Xml.workspaceToDom(Blockly.mainWorkspace));
+					}
+					const n = document.querySelector('#currPrjsName')?.textContent?.trim();
+					if (n) t.name = n;
+				} catch (e) {}
+			},
+
+			newTab() {
+				this._saveXml();
+				const t = this._newTab('Sem título', '', null);
+				this._switchTo(t.id);
+			},
+
+			_switchTo(id) {
+				this.activeId = id;
+				const t = this._active();
+				if (!t) return;
+				this._suppressOpen = true;
+				ipcRenderer.emit('show-open-dialog', {}, {
+					code: 0, msg: 'tab-switch',
+					data: { path: t.path, data: t.xml || EMPTY_WS }
+				});
+				this._render();
+			},
+
+			switchTo(id) {
+				if (id === this.activeId) return;
+				this._saveXml();
+				this._switchTo(id);
+			},
+
+			closeTab(id) {
+				if (this.tabs.length <= 1) return;
+				const idx = this.tabs.findIndex(t => t.id === id);
+				if (idx === -1) return;
+				const wasActive = this.activeId === id;
+				this.tabs.splice(idx, 1);
+				if (wasActive) {
+					this._switchTo(this.tabs[Math.max(0, idx - 1)].id);
+				} else {
+					this._render();
+				}
+			},
+
+			_autoSave() {
+				const t = this._active();
+				if (!t || !t.path) return;
+				document.querySelector('#saveNavLink')?.click();
+				const now = new Date();
+				const h = String(now.getHours()).padStart(2,'0');
+				const m = String(now.getMinutes()).padStart(2,'0');
+				const s = String(now.getSeconds()).padStart(2,'0');
+				this._lastSaveText = '💾 ' + h + ':' + m + ':' + s;
+				this._render();
+				setTimeout(() => { this._lastSaveText = ''; this._render(); }, 4000);
+			},
+
+			_render() {
+				const bar = document.querySelector('#astro-tab-bar');
+				if (!bar) return;
+
+				bar.innerHTML = '';
+
+				// Tabs
+				this.tabs.forEach(tab => {
+					const el = document.createElement('div');
+					el.className = 'astro-tab' + (tab.id === this.activeId ? ' astro-active' : '');
+					el.dataset.tabId = String(tab.id);
+					const name = tab.name || 'Sem título';
+					el.innerHTML = '<span class="astro-tab-name" title="' + name + '">' + name + '</span>' +
+						'<button class="astro-tab-close" data-closeId="' + tab.id + '">×</button>';
+					bar.appendChild(el);
+				});
+
+				// New tab button (fresh element each render)
+				const btn = document.createElement('button');
+				btn.id = 'astro-new-tab-btn';
+				btn.title = 'Nova aba';
+				btn.textContent = '+';
+				bar.appendChild(btn);
+
+				// Auto-save indicator (fresh element each render)
+				const ind = document.createElement('div');
+				ind.id = 'astro-autosave-indicator';
+				if (this._lastSaveText) {
+					ind.textContent = this._lastSaveText;
+					ind.classList.add('saved');
+				}
+				bar.appendChild(ind);
+
+				// Single delegated handler on the bar (replaces previous)
+				bar.onclick = (e) => {
+					const closeBtn = e.target.closest('[data-closeId]');
+					if (closeBtn) { this.closeTab(parseInt(closeBtn.dataset.closeid)); return; }
+					if (e.target.id === 'astro-new-tab-btn' || e.target.closest('#astro-new-tab-btn')) {
+						this.newTab(); return;
+					}
+					const tabEl = e.target.closest('[data-tabId]');
+					if (tabEl) this.switchTo(parseInt(tabEl.dataset.tabid));
+				};
+			},
+
+			init() {
+				setTimeout(() => {
+					const initialName = document.querySelector('#currPrjsName')?.textContent?.trim() || 'Projeto 1';
+					const t = this._newTab(initialName, '');
+					this.activeId = t.id;
+
+					// Track real file opens
+					ipcRenderer.on('show-open-dialog', (_, result) => {
+						if (result?.code === 0 && result?.data && !this._suppressOpen) {
+							const p = result.data.path || '';
+							const tab = this._active();
+							if (tab) {
+								tab.path = p;
+								tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título';
+							}
+							setTimeout(() => this._render(), 80);
+						}
+						this._suppressOpen = false;
+					});
+
+					// Track saves
+					ipcRenderer.on('show-save-dialog', (_, result) => {
+						if (result?.code === 0 && result?.data?.path) {
+							const tab = this._active();
+							if (tab) {
+								tab.path = result.data.path;
+								tab.name = result.data.path.split(/[/\\]/).pop();
+							}
+							setTimeout(() => this._render(), 80);
+						}
+					});
+
+					// Watch project name badge
+					const nameEl = document.querySelector('#currPrjsName');
+					if (nameEl) {
+						new MutationObserver(() => {
+							const n = nameEl.textContent?.trim();
+							const tab = this._active();
+							if (tab && n) { tab.name = n; this._render(); }
+						}).observe(nameEl, { childList: true, characterData: true, subtree: true });
+					}
+
+					setInterval(() => this._autoSave(), AUTO_SAVE_MS);
+					this._render();
+				}, 2500);
+			}
+		};
+
+		if (document.readyState === 'loading') {
+			document.addEventListener('DOMContentLoaded', () => TM.init());
+		} else {
+			TM.init();
+		}
+		window._astroTabs = TM;
+	})();
+	</script>
+</html>
