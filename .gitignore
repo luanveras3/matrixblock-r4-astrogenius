@@ -15,6 +15,10 @@
 !test_app.js
 !.gitignore
 
+# Documentação
+!README.md
+!CHANGELOG.md
+
 # Arquivos fonte modificados
 !resources/
 !resources/app_src/
