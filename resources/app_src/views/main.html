@@ -50,44 +50,45 @@
 		<!-- AstroGenius: Tab bar & auto-save styles -->
 		<style>
 			#astro-tab-bar {
-				display: flex; align-items: stretch; background: #0d1117;
-				border-bottom: 2px solid #006466; min-height: 30px;
+				display: flex; align-items: stretch; background: #008184;
+				border-bottom: 2px solid #006466; min-height: 32px;
 				overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
+				position: relative; z-index: 1050;
 			}
 			#astro-tab-bar::-webkit-scrollbar { height: 3px; }
-			#astro-tab-bar::-webkit-scrollbar-thumb { background: #006466; }
+			#astro-tab-bar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.3); }
 			.astro-tab {
 				display: flex; align-items: center; padding: 0 6px 0 12px;
-				font-size: 12px; color: #8b949e; cursor: pointer;
-				border-right: 1px solid #21262d; white-space: nowrap;
+				font-size: 12px; color: rgba(255,255,255,0.75); cursor: pointer;
+				border-right: 1px solid rgba(0,0,0,0.2); white-space: nowrap;
 				gap: 5px; user-select: none; min-width: 80px; max-width: 200px;
 			}
-			.astro-tab:hover { background: #161b22; color: #c9d1d9; }
+			.astro-tab:hover { background: rgba(0,0,0,0.15); color: #fff; }
 			.astro-tab.astro-active {
-				background: #008184; color: #fff;
-				border-bottom: 2px solid #00d4d7; margin-bottom: -2px;
+				background: rgba(0,0,0,0.25); color: #fff;
+				border-bottom: 2px solid #fff; margin-bottom: -2px;
 			}
 			.astro-tab-name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 			.astro-tab-close {
 				background: none; border: none; color: inherit; font-size: 15px;
 				cursor: pointer; padding: 0; width: 18px; height: 18px;
 				display: flex; align-items: center; justify-content: center;
-				border-radius: 3px; opacity: 0.4; flex-shrink: 0; line-height: 1;
+				border-radius: 3px; opacity: 0.5; flex-shrink: 0; line-height: 1;
 			}
 			.astro-tab:hover .astro-tab-close,
 			.astro-tab.astro-active .astro-tab-close { opacity: 0.8; }
-			.astro-tab-close:hover { opacity: 1 !important; background: rgba(255,80,80,0.2); color: #ff6b6b; }
+			.astro-tab-close:hover { opacity: 1 !important; background: rgba(255,80,80,0.3); color: #fff; }
 			#astro-new-tab-btn {
-				padding: 0 14px; background: none; border: none; color: #8b949e;
-				font-size: 20px; cursor: pointer; flex-shrink: 0; line-height: 30px;
+				padding: 0 14px; background: none; border: none; color: rgba(255,255,255,0.7);
+				font-size: 20px; cursor: pointer; flex-shrink: 0; line-height: 32px;
 			}
-			#astro-new-tab-btn:hover { color: #fff; background: #161b22; }
+			#astro-new-tab-btn:hover { color: #fff; background: rgba(0,0,0,0.15); }
 			#astro-autosave-indicator {
-				margin-left: auto; padding: 0 12px; font-size: 11px; color: #2ea04426;
+				margin-left: auto; padding: 0 12px; font-size: 11px; color: rgba(255,255,255,0.25);
 				display: flex; align-items: center; flex-shrink: 0;
 				transition: color 0.5s;
 			}
-			#astro-autosave-indicator.saved { color: #3fb950; }
+			#astro-autosave-indicator.saved { color: rgba(255,255,255,0.9); }
 			/* Push content-Div below nav (53px) + tab bar (32px) */
 			.mainContainer { display: flex !important; flex-direction: column !important; height: 100vh !important; }
 			.content-Div {
@@ -431,7 +432,7 @@
 
 		const TM = {
 			tabs: [], activeId: null, _nextId: 1,
-			_suppressOpen: false, _lastSaveText: '',
+			_suppressOpen: false, _openInNewTab: false, _lastSaveText: '',
 
 			_newTab(name, path, xml) {
 				const t = { id: this._nextId++, name: name || 'Sem título', path: path || '', xml: xml || null };
@@ -553,16 +554,29 @@
 					const t = this._newTab(initialName, '');
 					this.activeId = t.id;
 
+					// Intercept "Abrir arquivo" to open in new tab
+					const openBtn = document.querySelector('#openNavLink');
+					if (openBtn) {
+						openBtn.addEventListener('click', () => { this._openInNewTab = true; });
+					}
+
 					// Track real file opens
 					ipcRenderer.on('show-open-dialog', (_, result) => {
+						const shouldOpenNew = this._openInNewTab;
+						this._openInNewTab = false;
 						if (result?.code === 0 && result?.data && !this._suppressOpen) {
 							const p = result.data.path || '';
-							const tab = this._active();
-							if (tab) {
-								tab.path = p;
-								tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título';
+							if (shouldOpenNew) {
+								this._saveXml();
+								const name = p ? p.split(/[/\\]/).pop() : 'Sem título';
+								const t = this._newTab(name, p, null);
+								this.activeId = t.id;
+								setTimeout(() => this._render(), 80);
+							} else {
+								const tab = this._active();
+								if (tab) { tab.path = p; tab.name = p ? p.split(/[/\\]/).pop() : 'Sem título'; }
+								setTimeout(() => this._render(), 80);
 							}
-							setTimeout(() => this._render(), 80);
 						}
 						this._suppressOpen = false;
 					});
