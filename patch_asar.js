@@ -7,9 +7,10 @@ const SRC_DIR  = 'C:/matrixblock-r4/resources/app_src';
 
 // Files to patch: [asarPath, srcRelPath]
 const PATCHES = [
-  ['app.compressed.js',              'app.compressed.js'],
+  ['app.compressed.js',                'app.compressed.js'],
   ['blockly-core/msg/scratch_msgs.js', 'blockly-core/msg/scratch_msgs.js'],
-  ['views/main.html',                'views/main.html'],
+  ['blockly-core/blocks/_mini.js',     'blockly-core/blocks/_mini.js'],
+  ['views/main.html',                  'views/main.html'],
 ];
 
 console.log('Reading original asar backup...');

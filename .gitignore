@@ -5,6 +5,7 @@
 /resources/app_src/*
 /resources/app_src/blockly-core/*
 /resources/app_src/blockly-core/msg/*
+/resources/app_src/blockly-core/blocks/*
 /resources/app_src/views/*
 
 # --- Incluir explicitamente o que criamos / modificamos ---
@@ -21,6 +22,8 @@
 !resources/app_src/blockly-core/
 !resources/app_src/blockly-core/msg/
 !resources/app_src/blockly-core/msg/scratch_msgs.js
+!resources/app_src/blockly-core/blocks/
+!resources/app_src/blockly-core/blocks/_mini.js
 !resources/app_src/views/
 !resources/app_src/views/main.html
 
