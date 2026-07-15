@@ -133,7 +133,7 @@
 		<div class="modal-dialog modal-lg">
 			<div class="modal-content">
 				<div class="modal-header">
-					<h5 class="modal-title">Construtor de Meu Bloco</h5>
+					<h5 class="modal-title" id="astro-myblock-title">Construtor de Meu Bloco</h5>
 					<button type="button" id="myblock_closeIcon" class="btn-close"></button>
 				</div>
 				<div class="modal-body">
@@ -170,7 +170,7 @@
 		<div class="modal-dialog">
 			<div class="modal-content">
 				<div class="modal-header">
-					<h5 class="modal-title">Sobre o Programa</h5>
+					<h5 class="modal-title" id="astro-about-title">Sobre o Programa</h5>
 					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
 				</div>
 				<div class="modal-body">
@@ -179,15 +179,15 @@
 						<br>
 						<br>
 					</div>
-					<p class="blockquote-footer">
+					<p class="blockquote-footer" id="astro-about-desc">
 						O MATRIXblock transforma programação visual em código C++ para estudantes, evoluindo dos blocos do Scratch 3
 						para conectar de forma fluida a programação gráfica e textual.
 					</p>
 					<hr>
-					<a style="font-size:0.8em;" href="packages_licenses.html" target="_blank"><small>Estes componentes de software podem estar
+					<a style="font-size:0.8em;" href="packages_licenses.html" target="_blank"><small id="astro-about-licenses">Estes componentes de software podem estar
 					incluídos neste produto.</small></a>
 					<br>
-					<a style="font-size:0.8em;" href="eula.html" target="_blank"><small>Ao utilizar este programa, você concorda com
+					<a style="font-size:0.8em;" href="eula.html" target="_blank"><small id="astro-about-eula">Ao utilizar este programa, você concorda com
 					os Termos de Uso.</small></a>
 					<div class="text-center">
 						<hr>
@@ -203,7 +203,7 @@
 		<div class="modal-dialog modal-lg">
 			<div class="modal-content">
 				<div class="modal-header">
-					<h5 class="modal-title">Recursos de Aprendizagem</h5>
+					<h5 class="modal-title" id="astro-examples-title">Recursos de Aprendizagem</h5>
 					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
 				</div>
 				<div class="modal-body text-center">
@@ -268,7 +268,7 @@
 					</div>
 				</div>
 				<div class="modal-footer text-center">
-					<p style="font-size:0.8em;">Para mais Planos de Aula e Exemplos, visite:
+					<p style="font-size:0.8em;" id="astro-examples-footer-p">Para mais Planos de Aula e Exemplos, visite:
 						<a style="color: blue; cursor: pointer;"
 						onclick="require('electron').shell.openExternal('https://www.matrixrobotics.com/stem-lab/')">
 							matrixrobotics.com
@@ -549,6 +549,92 @@
 		}
 		// Renamed to avoid shadowing conflicts with 'const t = ...' local vars inside methods.
 		function tr(key) { return STRINGS[currentLocale()][key] || STRINGS.en[key]; }
+
+		// --- Runtime i18n for HTML modal texts that the app's own i18n doesn't manage.
+		// Keyed by element ID (or CSS selector). Values may include <br> etc.; we
+		// use innerHTML if the string contains "<", textContent otherwise.
+		const MODAL_STRINGS = {
+			en: {
+				'astro-about-title':          'About Software',
+				'astro-about-desc':
+					'MATRIXblock transforms visual coding into C++ code for students, ' +
+					'evolving from Scratch 3 blocks to bridge graphical and text-based ' +
+					'programming seamlessly.',
+				'astro-about-licenses':       'These software components may be included in this product.',
+				'astro-about-eula':           'By using this program, you agree to the Terms of Use.',
+				'astro-myblock-title':        'My Block Builder',
+				'myblock_addNumBtn':          'Number Input',
+				'myblock_addStringBtn':       'Text Input',
+				'myblock_addBoolBtn':         'Logic Input',
+				'myblock_addTagBtn':          'Add Tag',
+				'myblock_sureAddbtn':         'Finish',
+				'myblock_closebtn':           'Cancel',
+				'astro-examples-title':       'Learning Resources',
+				'exampleTitle_1':             'Software Introduction',
+				'exampleTitle_2':             'MATRIX R4 Guidebook',
+				'exampleTitle_3':             'Structural Components Guidebook',
+				'exampleTitle_4':             'Basic Car',
+				'exampleTitle_5':             'Basic Car 2',
+				'exampleTitle_6':             'MJ2 Car',
+				'astro-examples-footer-p':    'For more Unit Plans and Examples, visit:',
+				'fwUpdateModalLabel':         'Mini R4 Firmware Update Utility',
+				'dfu_scanBtn':                '1. Scan DFU Device',
+				'dfu_selectFirmwareBtn':      '2. Select Firmware',
+				'dfu_run':                    '3. Update Firmware',
+				'dfu_close':                  'Close',
+				'dfu_fw_latest_ver':          '*Latest FW Ver: N/A',
+				// Menu label (our own) — also refreshed on locale change now
+				'astroExportInoLabel':        'Export as .ino',
+			},
+			'pt-BR': {
+				'astro-about-title':          'Sobre o Programa',
+				'astro-about-desc':
+					'O MATRIXblock transforma programação visual em código C++ para ' +
+					'estudantes, evoluindo dos blocos do Scratch 3 para conectar de ' +
+					'forma fluida a programação gráfica e textual.',
+				'astro-about-licenses':       'Estes componentes de software podem estar incluídos neste produto.',
+				'astro-about-eula':           'Ao utilizar este programa, você concorda com os Termos de Uso.',
+				'astro-myblock-title':        'Construtor de Meu Bloco',
+				'myblock_addNumBtn':          'Entrada Numérica',
+				'myblock_addStringBtn':       'Entrada de Texto',
+				'myblock_addBoolBtn':         'Entrada Lógica',
+				'myblock_addTagBtn':          'Adicionar Rótulo',
+				'myblock_sureAddbtn':         'Concluir',
+				'myblock_closebtn':           'Cancelar',
+				'astro-examples-title':       'Recursos de Aprendizagem',
+				'exampleTitle_1':             'Introdução ao Programa',
+				'exampleTitle_2':             'Manual do MATRIX R4',
+				'exampleTitle_3':             'Manual dos Componentes Estruturais',
+				'exampleTitle_4':             'Carro Básico',
+				'exampleTitle_5':             'Carro Básico 2',
+				'exampleTitle_6':             'Carro MJ2',
+				'astro-examples-footer-p':    'Para mais Planos de Aula e Exemplos, visite:',
+				'fwUpdateModalLabel':         'Atualizador de Firmware Mini R4',
+				'dfu_scanBtn':                '1. Buscar Dispositivo DFU',
+				'dfu_selectFirmwareBtn':      '2. Selecionar Firmware',
+				'dfu_run':                    '3. Atualizar Firmware',
+				'dfu_close':                  'Fechar',
+				'dfu_fw_latest_ver':          '*Versão mais recente: N/D',
+				'astroExportInoLabel':        'Exportar como .ino',
+			},
+		};
+
+		function applyModalStrings() {
+			const map = MODAL_STRINGS[currentLocale()] || MODAL_STRINGS.en;
+			for (const id in map) {
+				const el = document.getElementById(id);
+				if (!el) continue;
+				const val = map[id];
+				if (val.indexOf('<') >= 0) el.innerHTML = val; else el.textContent = val;
+			}
+			// The DFU device-select placeholder is an <option>, not a top-level ID
+			const dfuOpt = document.querySelector('#dfu_devSelect option[value=""]');
+			if (dfuOpt) {
+				dfuOpt.textContent = currentLocale() === 'pt-BR'
+					? 'Faça a busca primeiro.'
+					: 'Please scan first.';
+			}
+		}
 
 		const TM = {
 			tabs: [], activeId: null, _nextId: 1,
@@ -974,11 +1060,9 @@
 						setTimeout(() => this._markSaved(), 300);
 					});
 
-					// Export .ino menu entry + label
+					// Export .ino menu entry (label is set/refreshed by applyModalStrings)
 					const exportLink = document.querySelector('#astroExportInoLink');
 					if (exportLink) exportLink.addEventListener('click', () => this.exportIno());
-					const exportLabel = document.querySelector('#astroExportInoLabel');
-					if (exportLabel) exportLabel.textContent = tr('exportInoLabel');
 
 					// Track real file opens
 					ipcRenderer.on('show-open-dialog', (_, result) => {
@@ -1031,6 +1115,18 @@
 
 					this._setupDirtyTracking();
 					this._setupShortcuts();
+
+					// Bilingual HTML modal texts (English default + pt-BR overrides).
+					// Apply once on init, then re-apply whenever the user picks a language.
+					applyModalStrings();
+					const langMenu = document.querySelector('#langDropDownMenu');
+					if (langMenu) {
+						langMenu.addEventListener('click', () => {
+							// Give the app's own i18n a moment to run first, then reapply ours
+							setTimeout(applyModalStrings, 300);
+							setTimeout(applyModalStrings, 800);
+						}, true);
+					}
 
 					// Persist on unload
 					window.addEventListener('beforeunload', () => this._persistSession());
