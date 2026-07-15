@@ -88,9 +88,15 @@
 				transition: color 0.5s;
 			}
 			#astro-autosave-indicator.saved { color: #3fb950; }
-			/* Ensure layout fills window correctly with the tab bar added */
+			/* Push content-Div below nav (53px) + tab bar (32px) */
 			.mainContainer { display: flex !important; flex-direction: column !important; height: 100vh !important; }
-			.content-Div { flex: 1 !important; min-height: 0 !important; overflow: hidden; }
+			.content-Div {
+				position: absolute !important;
+				top: 85px !important;
+				left: 0 !important; right: 0 !important; bottom: 0 !important;
+				height: auto !important;
+				overflow: hidden;
+			}
 		</style>
 	</head>
 
