@@ -1,4 +1,4 @@
-# Installing AstroGenius v3.3 on a fresh MATRIXblock Mini R4
+# Installing AstroGenius v3.4.1 on a fresh MATRIXblock Mini R4
 
 Step-by-step guide for applying the AstroGenius fork (built on top of
 MATRIXblock Mini R4 v1.0.8) to a clean install. Tested on Windows 11
@@ -160,12 +160,32 @@ Expect `STATUS: OK - app opened correctly` at the end.
 
 ## Rolling back
 
-If something goes wrong, restore the backup:
+Close the app first (Task Manager → end `MATRIXblock Mini R4.exe` if
+it's still running — while it's alive, Windows keeps `app.asar` locked
+and the copy silently no-ops), then restore the backup:
 
 ```powershell
 Copy-Item 'C:\matrixblock-r4\resources\app.asar.bak' `
           'C:\matrixblock-r4\resources\app.asar' -Force
 ```
+
+From v3.4.1 onward this is all that's needed — the fork keeps its
+language preference in a fork-scoped `astro-lang` localStorage key
+and never writes to the pristine app's `lang` key, so pristine boots
+cleanly after the swap.
+
+**Rolling back from a ≤v3.4 install** — an older fork wrote its
+language preference to `localStorage.lang`, which pristine v1.0.8
+reads on startup. Pristine's Blockly is missing a few pt-BR category
+translations, so if `lang` is still set to `pt-BR` after the swap the
+category names render as raw `%{BKY_CATEGORY__MINI}` placeholders.
+Wipe the storage before launching:
+
+```powershell
+Remove-Item 'C:\Users\%USERNAME%\AppData\Roaming\MATRIXblock Mini R4\Local Storage' -Recurse -Force
+```
+
+The pristine app rebuilds this folder on next launch.
 
 ---
 

@@ -455,6 +455,23 @@
 			</div>
 		</div>
 	</body>
+	<!-- v3.4.1-hotfix: language-preference key migration.
+	     Must run BEFORE app.compressed.js because the app's obfuscated boot
+	     reads 'astro-lang' (renamed from 'lang' inside its string table) and
+	     writes an 'en' default if unset — which would silently overwrite any
+	     pt-BR preference we haven't migrated yet. See views/main.html for the
+	     full rationale. -->
+	<script type="text/javascript">
+	(function () {
+		try {
+			const legacy = localStorage.getItem('lang');
+			if (legacy && !localStorage.getItem('astro-lang')) {
+				localStorage.setItem('astro-lang', legacy);
+			}
+			localStorage.removeItem('lang');
+		} catch (e) {}
+	})();
+	</script>
 	<!-- App js -->
 	<!-- <script type="module" src="../src/app.js"></script> -->
 	<!-- <script type="text/javascript" src="../app.bundle.js"></script> -->

@@ -6,6 +6,41 @@ Based on upstream v1.0.8. Format loosely inspired by
 
 ---
 
+## [v3.4.1-hotfix] — 2026-07-16
+
+### Fixed
+- **Rollback to pristine v1.0.8 now leaves the app usable.** Symptom
+  (reported by a partner school after swapping `app.asar` back to the
+  v1.0.8 backup): the original app came up with every Blockly category
+  rendered as its raw i18n template — `%{BKY_CATEGORY__MINI}`,
+  `%{BKY_CATEGORY__MOVEMENT}`, etc. — instead of "Mini", "Movement".
+  Reproduced end-to-end via Playwright.
+
+  Root cause: pristine v1.0.8's obfuscated app stores the language
+  preference in `localStorage.lang`, and its Blockly `scratch_msgs.js`
+  is missing the pt-BR translations for category names (one of the
+  strings the fork adds). While the fork was installed, the pt-BR
+  preference persisted in `localStorage.lang`. On rollback, pristine
+  read that key back and tried to render categories in a locale it
+  couldn't fully resolve.
+
+  Fix has two parts:
+  1. `app.compressed.js` — the single occurrence of `'lang'` in the
+     obfuscator's string table is renamed to `'astro-lang'`. Every
+     obfuscated read/write of the language preference now hits a
+     fork-scoped key, so pristine's `localStorage.lang` is never
+     touched during fork usage.
+  2. `views/main.html` — a tiny inline `<script>` runs **before**
+     `app.compressed.js` and migrates any pre-existing
+     `localStorage.lang` value to `astro-lang`, then removes the
+     stale `lang` key. Idempotent, catches upgraders from ≤v3.4.
+
+  Rolling back to pristine v1.0.8 from a v3.4.1+ install now works
+  with just the file swap — no manual `Local Storage/` cleanup
+  required. `INSTALL.md`'s rollback section has been updated.
+
+---
+
 ## [v3.4-stable] — 2026-07-16
 
 ### Added
