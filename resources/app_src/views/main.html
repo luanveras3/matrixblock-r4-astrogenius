@@ -371,6 +371,16 @@
 									<li><a class="dropdown-item" id="astroExportInoLink"><i class="bi bi-filetype-txt"></i>
 										<span id="astroExportInoLabel">Export as .ino</span></a>
 									</li>
+									<!-- Recent Files section — populated at runtime by the tab manager.
+									     Header, item <li>s (data-astro-recent="1") and trailing divider
+									     are hidden when the list is empty. -->
+									<li id="astroRecentHeader" style="display:none">
+										<h6 class="dropdown-header" style="margin:0"><span id="astroRecentHeaderLabel">Recent Files</span></h6>
+									</li>
+									<li id="astroRecentAnchor" style="display:none"></li>
+									<li id="astroRecentDivider" style="display:none">
+										<hr class="dropdown-divider">
+									</li>
 									<li>
 										<hr class="dropdown-divider">
 									</li>
@@ -470,6 +480,9 @@
 
 		const SESSION_KEY = 'astro-session-v1';
 		const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+		const RECENT_KEY  = 'astro-recent-v1';
+		const RECENT_MAX  = 10;   // stored
+		const RECENT_SHOW = 5;    // shown in menu
 
 		// --- i18n helper (English default + pt-BR fallback) ---
 		const STRINGS = {
@@ -505,6 +518,10 @@
 				exportInoLabel:   'Export as .ino',
 				exportInoOK:      'Exported to: %s',
 				exportInoFail:    'Failed to export .ino file.',
+				recentFiles:      'Recent Files',
+				recentMissingTitle: 'File not found',
+				recentMissingText:  'The file no longer exists:\n%s\n\nIt has been removed from the recent list.',
+				recentFailTitle:  'Could not open file',
 			},
 			'pt-BR': {
 				untitled:         'Sem título',
@@ -538,6 +555,10 @@
 				exportInoLabel:   'Exportar como .ino',
 				exportInoOK:      'Exportado para: %s',
 				exportInoFail:    'Falha ao exportar arquivo .ino.',
+				recentFiles:      'Arquivos Recentes',
+				recentMissingTitle: 'Arquivo não encontrado',
+				recentMissingText:  'O arquivo não existe mais:\n%s\n\nEle foi removido da lista de recentes.',
+				recentFailTitle:  'Não foi possível abrir o arquivo',
 			},
 		};
 		function currentLocale() {
@@ -800,6 +821,116 @@
 						Swal.fire({ title: tr('exportInoFail'), icon: 'error' });
 					}
 				}
+			},
+
+			// --- Recent Files ---
+			// Persists the last RECENT_MAX file paths the user has actually opened
+			// or saved (real filesystem paths — internal tab-switch fakes are not
+			// counted). The File menu renders the top RECENT_SHOW as clickable
+			// entries; clicking loads the file into a new tab (matching Ctrl+O).
+
+			_getRecent() {
+				try {
+					const raw = localStorage.getItem(RECENT_KEY);
+					const arr = raw ? JSON.parse(raw) : [];
+					return Array.isArray(arr) ? arr : [];
+				} catch (e) { return []; }
+			},
+
+			_addRecent(p) {
+				if (!p || typeof p !== 'string') return;
+				let list = this._getRecent().filter(e => e && e.path !== p);
+				list.unshift({ path: p, name: p.split(/[/\\]/).pop(), ts: Date.now() });
+				if (list.length > RECENT_MAX) list = list.slice(0, RECENT_MAX);
+				try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) {}
+				this._renderRecent();
+			},
+
+			_htmlEscape(s) {
+				return String(s).replace(/[&<>"']/g, m => (
+					{ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]
+				));
+			},
+
+			_renderRecent() {
+				const anchor  = document.querySelector('#astroRecentAnchor');
+				const header  = document.querySelector('#astroRecentHeader');
+				const divider = document.querySelector('#astroRecentDivider');
+				const label   = document.querySelector('#astroRecentHeaderLabel');
+				if (!anchor || !header || !divider) return;
+				// Wipe previous dynamic items
+				let n = anchor.nextElementSibling;
+				while (n && n.getAttribute && n.getAttribute('data-astro-recent') === '1') {
+					const next = n.nextElementSibling;
+					n.remove();
+					n = next;
+				}
+				const list = this._getRecent();
+				if (list.length === 0) {
+					header.style.display = 'none';
+					divider.style.display = 'none';
+					return;
+				}
+				header.style.display = '';
+				divider.style.display = '';
+				if (label) label.textContent = tr('recentFiles');
+				const items = list.slice(0, RECENT_SHOW);
+				// Insert AFTER the anchor, IN ORDER — so we walk backwards to prepend.
+				for (let i = items.length - 1; i >= 0; i--) {
+					const entry = items[i];
+					const li = document.createElement('li');
+					li.setAttribute('data-astro-recent', '1');
+					const a  = document.createElement('a');
+					a.className = 'dropdown-item';
+					a.href = '#';
+					a.title = entry.path;
+					a.style.maxWidth = '380px';
+					a.style.overflow = 'hidden';
+					a.style.textOverflow = 'ellipsis';
+					a.style.whiteSpace = 'nowrap';
+					a.innerHTML = '<i class="bi bi-file-earmark-code"></i> ' + this._htmlEscape(entry.name);
+					a.addEventListener('click', (ev) => {
+						ev.preventDefault();
+						this._openRecent(entry.path);
+					});
+					li.appendChild(a);
+					anchor.parentNode.insertBefore(li, anchor.nextSibling);
+				}
+			},
+
+			_openRecent(p) {
+				const fs = require('fs');
+				if (!fs.existsSync(p)) {
+					const list = this._getRecent().filter(e => e && e.path !== p);
+					try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) {}
+					this._renderRecent();
+					if (typeof Swal !== 'undefined') {
+						Swal.fire({
+							title: tr('recentMissingTitle'),
+							text: tr('recentMissingText').replace('%s', p),
+							icon: 'error',
+						});
+					}
+					return;
+				}
+				let xml;
+				try {
+					xml = fs.readFileSync(p, 'utf8');
+				} catch (e) {
+					if (typeof Swal !== 'undefined') {
+						Swal.fire({ title: tr('recentFailTitle'), text: e.message, icon: 'error' });
+					}
+					return;
+				}
+				// Mirror the Ctrl+O flow: snapshot current tab, then trigger the
+				// vendor's own show-open-dialog listeners with a synthesized result.
+				this._saveXml();
+				this._openInNewTab = true;
+				ipcRenderer.emit('show-open-dialog', {}, {
+					code: 0,
+					data: { path: p, data: xml }
+				});
+				this._addRecent(p);
 			},
 
 			toggleCodeMode() {
@@ -1085,6 +1216,7 @@
 									tab.dirty = false;
 								}
 							}
+							if (p) this._addRecent(p);
 							setTimeout(() => { this._loading = false; this._render(); this._persistSession(); }, 400);
 						}
 						this._suppressOpen = false;
@@ -1099,6 +1231,7 @@
 								tab.name = result.data.path.split(/[/\\]/).pop();
 								tab.dirty = false;
 							}
+							this._addRecent(result.data.path);
 							setTimeout(() => { this._render(); this._persistSession(); }, 80);
 						}
 					});
@@ -1121,9 +1254,10 @@
 					// Also re-render the tab bar so its strings (Nova aba, </> Código,
 					// dirty tooltip, etc., which live in the STRINGS map) refresh too.
 					applyModalStrings();
+					this._renderRecent();
 					const langMenu = document.querySelector('#langDropDownMenu');
 					if (langMenu) {
-						const refresh = () => { applyModalStrings(); this._render(); };
+						const refresh = () => { applyModalStrings(); this._render(); this._renderRecent(); };
 						langMenu.addEventListener('click', () => {
 							// Give the app's own i18n a moment to run first, then reapply ours
 							setTimeout(refresh, 300);
