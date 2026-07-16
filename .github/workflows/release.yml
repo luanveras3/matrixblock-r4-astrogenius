@@ -1,0 +1,65 @@
+name: Build patched app.asar
+
+# Fires when a version tag (e.g. v3.4-stable) is pushed. The job fetches
+# the pristine v1.0.8 app.asar from a private "vendor" repo, runs
+# patch_asar.js against it, and attaches the resulting app.asar to the
+# GitHub release for the tag — so end users can install by dropping one
+# file into resources\ instead of running Node locally.
+#
+# One-time setup lives in RELEASE.md.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create/update the release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch original app.asar from private vendor repo
+        env:
+          GH_TOKEN: ${{ secrets.BAK_REPO_TOKEN }}
+          BAK_REPO: ${{ vars.BAK_REPO }}
+          BAK_TAG:  ${{ vars.BAK_TAG }}
+          BAK_ASSET: ${{ vars.BAK_ASSET }}
+        run: |
+          set -euo pipefail
+          : "${BAK_REPO:?repo variable BAK_REPO not set}"
+          : "${BAK_TAG:?repo variable BAK_TAG not set}"
+          : "${BAK_ASSET:?repo variable BAK_ASSET not set}"
+          mkdir -p resources
+          gh release download "$BAK_TAG" \
+            --repo "$BAK_REPO" \
+            --pattern "$BAK_ASSET" \
+            --output resources/app.asar.bak
+          echo "Backup size: $(stat -c%s resources/app.asar.bak) bytes"
+
+      - name: Run patcher
+        env:
+          ASAR_BACKUP:  resources/app.asar.bak
+          ASAR_OUT:     resources/app.asar
+          ASAR_SRC_DIR: resources/app_src
+        run: node patch_asar.js
+
+      - name: Publish patched app.asar as release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" resources/app.asar --clobber

@@ -15,9 +15,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const BACKUP   = 'C:/matrixblock-r4/resources/app.asar.bak';
-const OUT      = 'C:/matrixblock-r4/resources/app.asar';
-const SRC_DIR  = 'C:/matrixblock-r4/resources/app_src';
+// Paths can be overridden via env vars (used by CI). Defaults target a
+// standard Windows install so `node patch_asar.js` still works locally
+// with zero config.
+const BACKUP   = process.env.ASAR_BACKUP  || 'C:/matrixblock-r4/resources/app.asar.bak';
+const OUT      = process.env.ASAR_OUT     || 'C:/matrixblock-r4/resources/app.asar';
+const SRC_DIR  = process.env.ASAR_SRC_DIR || 'C:/matrixblock-r4/resources/app_src';
 
 // Files to patch: [pathInsideAsar, pathRelativeToSRC_DIR]
 const PATCHES = [

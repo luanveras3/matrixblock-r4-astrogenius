@@ -19,6 +19,12 @@
 !README.md
 !CHANGELOG.md
 !INSTALL.md
+!RELEASE.md
+
+# GitHub Actions
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
 
 # Patched source files
 !resources/
