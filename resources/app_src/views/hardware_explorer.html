@@ -1,0 +1,803 @@
+<!--
+  Hardware Explorer panel - standalone mock (iteration 3).
+
+  Bilingual: English defaults in HTML; pt-BR overrides applied at load
+  via applyExplorerStrings() following the same STRINGS / MODAL_STRINGS
+  pattern used by views/main.html.
+
+  Standalone dev: locale is picked from a dev-only toggle in the header
+  (visible while this file is opened directly in a browser). When this
+  markup is embedded into the app it'll pick the locale from
+  Blockly.ScratchMsgs.currentLocale_ just like the rest of the fork.
+
+  Coordinate system: each hotspot uses percentage of the .board box
+  (0..100), so hotspots stay aligned regardless of container size.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hardware Explorer &mdash; MATRIX Mini R4</title>
+<style>
+  :root {
+    --brand: #008184;
+    --brand-dark: #006568;
+    --brand-light: #e6f3f3;
+    --bg: #f4f6f7;
+    --panel-bg: #ffffff;
+    --hot-bg: rgba(255, 255, 255, 0.96);
+    --hot-border: #008184;
+    --hot-text: #1a1a1a;
+    --hot-value: #006568;
+    --stale: #b0b0b0;
+    --detected: #2ecc71;
+    --empty: #b0b0b0;
+    --active-glow: 0 0 0 3px rgba(0, 129, 132, 0.35);
+    --font: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    color: #1a1a1a;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 20px;
+    background: var(--brand);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    z-index: 2;
+    gap: 12px;
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
+  header .status {
+    font-size: 12px;
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+  }
+  header .status.live::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #7bff9c;
+    margin-right: 6px;
+    box-shadow: 0 0 6px #7bff9c;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  header button {
+    background: #ffffff;
+    color: var(--brand-dark);
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  header button:hover { background: #f0f0f0; }
+  header .dev-lang {
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+  header .dev-lang:hover { background: rgba(255,255,255,0.28); }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    flex: 1;
+    min-height: 0;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .board-wrap {
+    background: var(--panel-bg);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    container-type: inline-size;
+  }
+
+  .board {
+    position: relative;
+    aspect-ratio: 1906 / 1851;
+    background-image: url('../assets/mb_r4_layout.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    width: min(100%, calc(100cqh * 1906 / 1851));
+    height: min(100%, calc(100cqw * 1851 / 1906));
+  }
+
+  .hotspot {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    background: var(--hot-bg);
+    border: 1.5px solid var(--hot-border);
+    border-radius: 6px;
+    padding: 3px 7px;
+    font-size: 10.5px;
+    line-height: 1.2;
+    text-align: center;
+    min-width: 52px;
+    color: var(--hot-text);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    transition: box-shadow 0.15s, border-color 0.15s, transform 0.1s;
+    cursor: pointer;
+    z-index: 1;
+  }
+  .hotspot:hover { transform: translate(-50%, -50%) scale(1.05); z-index: 2; }
+  .hotspot .label {
+    font-weight: 700;
+    font-size: 9.5px;
+    color: var(--brand-dark);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .hotspot .value {
+    font-family: "Consolas", "Courier New", monospace;
+    color: var(--hot-value);
+    font-weight: 600;
+    font-size: 11.5px;
+    margin-top: 1px;
+  }
+  .hotspot .sensor {
+    font-size: 9px;
+    color: #444;
+    font-style: italic;
+    margin-top: 1px;
+  }
+  .hotspot.empty { border-color: var(--empty); background: rgba(255,255,255,0.75); }
+  .hotspot.empty .value { color: var(--empty); }
+  .hotspot.detected { border-color: var(--detected); border-width: 2px; }
+  .hotspot.changed { box-shadow: var(--active-glow); }
+  .hotspot.selected {
+    border-color: var(--brand-dark);
+    border-width: 2.5px;
+    box-shadow: 0 0 0 4px rgba(0, 129, 132, 0.25);
+  }
+
+  .bitstrip { display: inline-flex; gap: 1px; margin-top: 2px; }
+  .bitstrip span { width: 5px; height: 8px; background: #d0d0d0; border-radius: 1px; }
+  .bitstrip span.on { background: #1a1a1a; }
+
+  .swatch {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.2);
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  aside {
+    background: var(--panel-bg);
+    border-radius: 8px;
+    padding: 14px;
+    overflow-y: auto;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    font-size: 12px;
+  }
+  aside h2 {
+    font-size: 12px;
+    margin: 14px 0 6px 0;
+    color: var(--brand-dark);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 3px;
+  }
+  aside h2:first-child { margin-top: 0; }
+
+  .sensor-card {
+    background: var(--brand-light);
+    border-left: 3px solid var(--brand);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    border-radius: 3px;
+    transition: box-shadow 0.15s;
+  }
+  .sensor-card.selected { box-shadow: 0 0 0 2px var(--brand-dark); }
+  .sensor-card .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 700;
+    color: var(--brand-dark);
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .sensor-card .card-head .port {
+    background: var(--brand);
+    color: #fff;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    letter-spacing: 0.4px;
+  }
+  .sensor-card table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .sensor-card td {
+    padding: 2px 3px;
+    font-family: "Consolas", "Courier New", monospace;
+  }
+  .sensor-card td:first-child { color: #555; width: 40%; }
+  .sensor-card td:last-child { color: var(--brand-dark); font-weight: 600; text-align: right; }
+
+  .sensor-card .swatch-big {
+    width: 100%;
+    height: 30px;
+    border-radius: 3px;
+    margin: 4px 0;
+    border: 1px solid rgba(0,0,0,0.2);
+    transition: background 0.1s;
+  }
+  .sensor-card .bitstrip-big {
+    display: flex;
+    gap: 2px;
+    margin: 6px 0;
+    justify-content: center;
+  }
+  .sensor-card .bitstrip-big span {
+    width: 16px; height: 22px;
+    background: #d0d0d0;
+    border-radius: 2px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    font-size: 8px;
+    color: #666;
+    padding-bottom: 1px;
+  }
+  .sensor-card .bitstrip-big span.on { background: #1a1a1a; color: #fff; }
+
+  .empty-hint {
+    font-size: 11px;
+    color: #888;
+    font-style: italic;
+    padding: 6px 0;
+  }
+
+  .footer-note {
+    padding: 8px 20px;
+    font-size: 11px;
+    color: #666;
+    background: #eaeced;
+    border-top: 1px solid #d5d7d8;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="expl-title">Hardware Explorer &mdash; MATRIX Mini R4</h1>
+  <span class="status live" id="expl-status">live telemetry</span>
+  <button id="btnReturn" title="Return to your program">Return to my program</button>
+  <span class="dev-lang" id="devLangToggle" title="Dev-only locale toggle (removed on integration)">EN&nbsp;|&nbsp;pt-BR</span>
+</header>
+
+<main>
+
+  <div class="board-wrap">
+    <div class="board" id="board">
+      <!-- I2C ports (top edge, mux channels 1-4) -->
+      <div class="hotspot detected" data-id="i2c1" style="left: 30%; top: 8%;">
+        <div class="label">I&sup2;C 1</div>
+        <div class="sensor" id="hs-i2c1-sensor">Line Tracer</div>
+        <div class="bitstrip" id="hs-linetracer"></div>
+      </div>
+      <div class="hotspot detected" data-id="i2c2" style="left: 41%; top: 8%;">
+        <div class="label">I&sup2;C 2</div>
+        <div class="sensor" id="hs-i2c2-sensor">Color V3</div>
+        <div class="value"><span class="swatch" id="hs-swatch"></span><span id="hs-colorname">&mdash;</span></div>
+      </div>
+      <div class="hotspot empty" data-id="i2c3" style="left: 51%; top: 8%;">
+        <div class="label">I&sup2;C 3</div>
+        <div class="value" id="hs-i2c3-empty">empty</div>
+      </div>
+      <div class="hotspot detected" data-id="i2c4" style="left: 62%; top: 8%;">
+        <div class="label">I&sup2;C 4</div>
+        <div class="sensor" id="hs-i2c4-sensor">Ultrasonic</div>
+        <div class="value" id="hs-us">&mdash; cm</div>
+      </div>
+
+      <!-- Motor + Encoder + Servo corners (grouped per port) -->
+      <div class="hotspot" data-id="m4" style="left: 14%; top: 16%;">
+        <div class="label">M4</div><div class="value" id="hs-m4">0 rpm</div>
+      </div>
+      <div class="hotspot" data-id="m3" style="left: 86%; top: 16%;">
+        <div class="label">M3</div><div class="value" id="hs-m3">0 rpm</div>
+      </div>
+      <div class="hotspot" data-id="m1" style="left: 14%; top: 71%;">
+        <div class="label">M1</div><div class="value" id="hs-m1">0 rpm</div>
+      </div>
+      <div class="hotspot" data-id="m2" style="left: 86%; top: 71%;">
+        <div class="label">M2</div><div class="value" id="hs-m2">0 rpm</div>
+      </div>
+
+      <!-- Digital ports (left column) -->
+      <div class="hotspot empty" data-id="d1" style="left: 12%; top: 30%;">
+        <div class="label">D1</div><div class="value" id="hs-d1">A:1 B:1</div>
+      </div>
+      <div class="hotspot detected" data-id="d2" style="left: 12%; top: 39%;">
+        <div class="label">D2</div>
+        <div class="sensor" id="hs-d2-sensor">Miniature Switch</div>
+        <div class="value" id="hs-d2">released</div>
+      </div>
+      <div class="hotspot empty" data-id="d3" style="left: 12%; top: 48%;">
+        <div class="label">D3</div><div class="value" id="hs-d3">A:1 B:1</div>
+      </div>
+      <div class="hotspot empty" data-id="d4" style="left: 12%; top: 57%;">
+        <div class="label">D4</div><div class="value" id="hs-d4">A:1 B:1</div>
+      </div>
+
+      <!-- UART + Analog (right column) -->
+      <div class="hotspot empty" data-id="uart" style="left: 88%; top: 30%;">
+        <div class="label">UART</div><div class="value">&mdash;</div>
+      </div>
+      <div class="hotspot detected" data-id="a1" style="left: 88%; top: 39%;">
+        <div class="label">A1</div>
+        <div class="sensor" id="hs-a1-sensor">Gray Scale</div>
+        <div class="value" id="hs-a1">78%</div>
+      </div>
+      <div class="hotspot empty" data-id="a2" style="left: 88%; top: 48%;">
+        <div class="label">A2</div><div class="value" id="hs-a2">0 / 0</div>
+      </div>
+      <div class="hotspot empty" data-id="a3" style="left: 88%; top: 57%;">
+        <div class="label">A3</div><div class="value" id="hs-a3">0 / 0</div>
+      </div>
+
+      <!-- Onboard buttons (bottom-right) -->
+      <div class="hotspot" data-id="btnUp" style="left: 82%; top: 87%;">
+        <div class="label">BTN &uarr;</div><div class="value" id="hs-btnUp">released</div>
+      </div>
+      <div class="hotspot" data-id="btnDn" style="left: 82%; top: 95%;">
+        <div class="label">BTN &darr;</div><div class="value" id="hs-btnDn">released</div>
+      </div>
+    </div>
+  </div>
+
+  <aside id="sidepanel">
+    <h2 id="expl-h2-detected">Detected sensors</h2>
+
+    <div class="sensor-card" data-detail-for="i2c1">
+      <div class="card-head">
+        <span id="lt-title">Line Tracer 10CH</span>
+        <span class="port">I&sup2;C 1</span>
+      </div>
+      <div class="bitstrip-big" id="lt-strip"></div>
+      <table>
+        <tr><td id="lt-lbl-junction">Junction</td><td id="lt-junction">none</td></tr>
+        <tr><td id="lt-lbl-error">Position error</td><td id="lt-error">0.00</td></tr>
+        <tr><td id="lt-lbl-online">Sensors online</td><td id="lt-count">10 / 10</td></tr>
+      </table>
+    </div>
+
+    <div class="sensor-card" data-detail-for="i2c2">
+      <div class="card-head">
+        <span id="clr-title">Color V3 (TCS34725)</span>
+        <span class="port">I&sup2;C 2</span>
+      </div>
+      <div class="swatch-big" id="clr-swatch"></div>
+      <table>
+        <tr><td id="clr-lbl-name">Color</td><td id="clr-name">&mdash;</td></tr>
+        <tr><td id="clr-lbl-rgb">RGB</td><td id="clr-rgb">0, 0, 0</td></tr>
+        <tr><td id="clr-lbl-hex">Hex</td><td id="clr-hex">#000000</td></tr>
+        <tr><td id="clr-lbl-h">Hue (H)</td><td id="clr-h">0&deg;</td></tr>
+        <tr><td id="clr-lbl-s">Sat (S)</td><td id="clr-s">0%</td></tr>
+      </table>
+    </div>
+
+    <div class="sensor-card" data-detail-for="i2c4">
+      <div class="card-head">
+        <span id="us-title">Grove Ultrasonic</span>
+        <span class="port">I&sup2;C 4</span>
+      </div>
+      <table>
+        <tr><td id="us-lbl-dist">Distance</td><td id="us-dist">&mdash; cm</td></tr>
+      </table>
+    </div>
+
+    <div class="sensor-card" data-detail-for="a1">
+      <div class="card-head">
+        <span id="gs-title">Gray Scale MS-003</span>
+        <span class="port">A1</span>
+      </div>
+      <table>
+        <tr><td id="gs-lbl-refl">Reflection</td><td id="gs-refl">0%</td></tr>
+        <tr><td id="gs-lbl-raw">Raw value</td><td id="gs-raw">0</td></tr>
+      </table>
+    </div>
+
+    <div class="sensor-card" data-detail-for="d2">
+      <div class="card-head">
+        <span id="sw-title">Miniature Switch</span>
+        <span class="port">D2</span>
+      </div>
+      <table>
+        <tr><td id="sw-lbl-state">State</td><td id="sw-state">released</td></tr>
+        <tr><td id="sw-lbl-count">Press count</td><td id="sw-count">0</td></tr>
+      </table>
+    </div>
+
+    <h2 id="expl-h2-onboard">Onboard</h2>
+
+    <div class="sensor-card">
+      <div class="card-head">
+        <span id="imu-a-title">IMU (accelerometer)</span>
+        <span class="port" id="imu-port">internal</span>
+      </div>
+      <table>
+        <tr><td>X (g)</td><td id="tbl-ax">0.00</td></tr>
+        <tr><td>Y (g)</td><td id="tbl-ay">0.00</td></tr>
+        <tr><td>Z (g)</td><td id="tbl-az">0.00</td></tr>
+      </table>
+    </div>
+
+    <div class="sensor-card">
+      <div class="card-head">
+        <span id="imu-g-title">IMU (gyroscope)</span>
+        <span class="port" id="imu-port2">internal</span>
+      </div>
+      <table>
+        <tr><td>X (dps)</td><td id="tbl-gx">0.00</td></tr>
+        <tr><td>Y (dps)</td><td id="tbl-gy">0.00</td></tr>
+        <tr><td>Z (dps)</td><td id="tbl-gz">0.00</td></tr>
+      </table>
+    </div>
+
+    <p class="empty-hint" id="expl-empty-hint">
+      Analog/digital ports in gray have no identified sensor.
+      Click a port to tell us what's connected.
+    </p>
+  </aside>
+
+</main>
+
+<div class="footer-note" id="expl-footer">
+  <strong>Explorer mode:</strong> the board is running a read-only firmware;
+  your program is not active right now. Click <em>Return to my program</em>
+  to restore.
+</div>
+
+<script>
+/*
+  Bilingual layer.
+  Same pattern as views/main.html:
+    - MODAL_STRINGS: element-id -> localized text (applied by applyExplorerStrings on load).
+    - STRINGS: key -> localized runtime string (used by JS via tr()).
+    - currentLocale() detects Blockly's locale when embedded, else falls
+      back to a dev toggle (URL ?lang=pt-BR, then <html lang>, then 'en').
+*/
+
+const EXPL_STRINGS = {
+  en: {
+    footer_strong: 'Explorer mode:',
+    return_confirm: 'Restore your original program to the board? This will re-flash your code.',
+    restoring: 'restoring program...',
+    junction_none: 'none',
+    junction_left: 'left',
+    junction_right: 'right',
+    junction_cross: 'T / cross',
+    color_red: 'RED',
+    color_green: 'GREEN',
+    color_blue: 'BLUE',
+    color_yellow: 'YELLOW',
+    color_white: 'WHITE',
+    color_black: 'BLACK',
+    state_pressed: 'PRESSED',
+    state_released: 'released',
+  },
+  'pt-BR': {
+    footer_strong: 'Modo Explorar:',
+    return_confirm: 'Restaurar seu programa original na placa? Isso vai re-enviar o código.',
+    restoring: 'restaurando programa...',
+    junction_none: 'nenhuma',
+    junction_left: 'esquerda',
+    junction_right: 'direita',
+    junction_cross: 'T / cruz',
+    color_red: 'VERMELHO',
+    color_green: 'VERDE',
+    color_blue: 'AZUL',
+    color_yellow: 'AMARELO',
+    color_white: 'BRANCO',
+    color_black: 'PRETO',
+    state_pressed: 'PRESSIONADO',
+    state_released: 'solto',
+  },
+};
+
+const EXPL_MODAL_STRINGS = {
+  en: {
+    'expl-title':          'Hardware Explorer &mdash; MATRIX Mini R4',
+    'expl-status':         'live telemetry',
+    'btnReturn':           'Return to my program',
+    'expl-h2-detected':    'Detected sensors',
+    'expl-h2-onboard':     'Onboard',
+    'expl-empty-hint':     "Analog/digital ports in gray have no identified sensor. Click a port to tell us what's connected.",
+    'expl-footer':         '<strong>Explorer mode:</strong> the board is running a read-only firmware; your program is not active right now. Click <em>Return to my program</em> to restore.',
+    'hs-i2c1-sensor':      'Line Tracer',
+    'hs-i2c2-sensor':      'Color V3',
+    'hs-i2c3-empty':       'empty',
+    'hs-i2c4-sensor':      'Ultrasonic',
+    'hs-d2-sensor':        'Miniature Switch',
+    'hs-a1-sensor':        'Gray Scale',
+    'lt-title':            'Line Tracer 10CH',
+    'lt-lbl-junction':     'Junction',
+    'lt-lbl-error':        'Position error',
+    'lt-lbl-online':       'Sensors online',
+    'clr-title':           'Color V3 (TCS34725)',
+    'clr-lbl-name':        'Color',
+    'clr-lbl-rgb':         'RGB',
+    'clr-lbl-hex':         'Hex',
+    'clr-lbl-h':           'Hue (H)',
+    'clr-lbl-s':           'Sat (S)',
+    'us-title':            'Grove Ultrasonic',
+    'us-lbl-dist':         'Distance',
+    'gs-title':            'Gray Scale MS-003',
+    'gs-lbl-refl':         'Reflection',
+    'gs-lbl-raw':          'Raw value',
+    'sw-title':            'Miniature Switch',
+    'sw-lbl-state':        'State',
+    'sw-lbl-count':        'Press count',
+    'imu-a-title':         'IMU (accelerometer)',
+    'imu-g-title':         'IMU (gyroscope)',
+    'imu-port':            'internal',
+    'imu-port2':           'internal',
+  },
+  'pt-BR': {
+    'expl-title':          'Explorar Hardware &mdash; MATRIX Mini R4',
+    'expl-status':         'telemetria ao vivo',
+    'btnReturn':           'Voltar ao meu programa',
+    'expl-h2-detected':    'Sensores detectados',
+    'expl-h2-onboard':     'Placa (onboard)',
+    'expl-empty-hint':     'Portas analógicas/digitais em cinza não têm sensor identificado. Clique numa porta para dizer o que está conectado.',
+    'expl-footer':         '<strong>Modo Explorar:</strong> a placa está rodando um firmware de leitura; seu programa não está ativo agora. Clique em <em>Voltar ao meu programa</em> para restaurar.',
+    'hs-i2c1-sensor':      'Seguidor de Linha',
+    'hs-i2c2-sensor':      'Sensor de Cor V3',
+    'hs-i2c3-empty':       'vazio',
+    'hs-i2c4-sensor':      'Ultrassom',
+    'hs-d2-sensor':        'Chave Miniatura',
+    'hs-a1-sensor':        'Escala de Cinza',
+    'lt-title':            'Seguidor de Linha 10CH',
+    'lt-lbl-junction':     'Junção',
+    'lt-lbl-error':        'Erro (posição)',
+    'lt-lbl-online':       'Sensores online',
+    'clr-title':           'Sensor de Cor V3 (TCS34725)',
+    'clr-lbl-name':        'Cor',
+    'clr-lbl-rgb':         'RGB',
+    'clr-lbl-hex':         'Hex',
+    'clr-lbl-h':           'Matiz (H)',
+    'clr-lbl-s':           'Saturação (S)',
+    'us-title':            'Ultrassom Grove',
+    'us-lbl-dist':         'Distância',
+    'gs-title':            'Escala de Cinza MS-003',
+    'gs-lbl-refl':         'Reflexão',
+    'gs-lbl-raw':          'Valor bruto',
+    'sw-title':            'Chave Miniatura',
+    'sw-lbl-state':        'Estado',
+    'sw-lbl-count':        'Contagem de toques',
+    'imu-a-title':         'IMU (acelerômetro)',
+    'imu-g-title':         'IMU (giroscópio)',
+    'imu-port':            'interno',
+    'imu-port2':           'interno',
+  },
+};
+
+(function() {
+  const $ = (id) => document.getElementById(id);
+
+  // --- Locale resolution ----------------------------------------------------
+  // Standalone dev: URL ?lang= param OR <html lang> OR default 'en'.
+  // Embedded: replace with Blockly?.ScratchMsgs?.currentLocale_ lookup.
+  let _localeOverride = null;
+  function currentLocale() {
+    if (_localeOverride) return _localeOverride;
+    try {
+      const l = window.Blockly && Blockly.ScratchMsgs && Blockly.ScratchMsgs.currentLocale_;
+      if (l && EXPL_STRINGS[l]) return l;
+    } catch (e) {}
+    const urlLang = new URLSearchParams(location.search).get('lang');
+    if (urlLang && EXPL_STRINGS[urlLang]) return urlLang;
+    const htmlLang = document.documentElement.lang;
+    if (htmlLang && EXPL_STRINGS[htmlLang]) return htmlLang;
+    return 'en';
+  }
+  function tr(key) {
+    const loc = currentLocale();
+    return (EXPL_STRINGS[loc] && EXPL_STRINGS[loc][key]) || EXPL_STRINGS.en[key] || key;
+  }
+
+  function applyExplorerStrings() {
+    const map = EXPL_MODAL_STRINGS[currentLocale()] || EXPL_MODAL_STRINGS.en;
+    for (const id in map) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const val = map[id];
+      if (val.indexOf('<') >= 0) el.innerHTML = val; else el.textContent = val;
+    }
+    document.documentElement.lang = currentLocale();
+  }
+
+  // Dev-only language toggle (invisible after integration; removed on embed).
+  $('devLangToggle').addEventListener('click', () => {
+    _localeOverride = currentLocale() === 'en' ? 'pt-BR' : 'en';
+    applyExplorerStrings();
+  });
+
+  // --- Line tracer strips (built once) --------------------------------------
+  const ltStripCompact = $('hs-linetracer');
+  const ltStripBig = $('lt-strip');
+  for (let i = 0; i < 10; i++) {
+    ltStripCompact.appendChild(document.createElement('span'));
+    const s2 = document.createElement('span');
+    s2.textContent = (i + 1);
+    ltStripBig.appendChild(s2);
+  }
+
+  // Color palette rotator - keys resolve at render time so locale switches
+  // during runtime relabel the swatch immediately.
+  const colorSet = [
+    { key: 'color_red',    rgb: [220, 40, 30] },
+    { key: 'color_green',  rgb: [40, 200, 60] },
+    { key: 'color_blue',   rgb: [30, 60, 220] },
+    { key: 'color_yellow', rgb: [240, 220, 20] },
+    { key: 'color_white',  rgb: [240, 240, 240] },
+    { key: 'color_black',  rgb: [10, 10, 10] },
+  ];
+  const junctionKeys = ['junction_none','junction_left','junction_right','junction_cross'];
+
+  let tick = 0;
+  function mockTick() {
+    tick++;
+
+    // Line tracer - snake pattern moving across
+    const activeIdx = Math.floor(tick / 3) % 12;
+    const pattern = Array.from({length: 10}, (_, i) =>
+      i >= activeIdx - 2 && i <= activeIdx + 1
+    );
+    ltStripCompact.querySelectorAll('span').forEach((el, i) =>
+      el.classList.toggle('on', pattern[i]));
+    ltStripBig.querySelectorAll('span').forEach((el, i) =>
+      el.classList.toggle('on', pattern[i]));
+    const onCount = pattern.filter(Boolean).length;
+    $('lt-count').textContent = `${onCount} / 10`;
+    const center = 4.5;
+    const weightedPos = pattern.reduce((acc, on, i) => on ? acc + (i - center) : acc, 0)
+      / (onCount || 1);
+    $('lt-error').textContent = weightedPos.toFixed(2);
+    const junctionKey = onCount >= 6 ? 'junction_cross'
+                      : (onCount >= 4 ? 'junction_left' : 'junction_none');
+    $('lt-junction').textContent = tr(junctionKey);
+
+    // Color: rotate every ~3s
+    const clr = colorSet[Math.floor(tick / 30) % colorSet.length];
+    const [r, g, b] = clr.rgb;
+    const rgbStr = `rgb(${r}, ${g}, ${b})`;
+    const hex = '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('').toUpperCase();
+    const localizedName = tr(clr.key);
+    $('hs-swatch').style.background = rgbStr;
+    $('hs-colorname').textContent = localizedName;
+    $('clr-swatch').style.background = rgbStr;
+    $('clr-name').textContent = localizedName;
+    $('clr-rgb').textContent = `${r}, ${g}, ${b}`;
+    $('clr-hex').textContent = hex;
+    const maxC = Math.max(r,g,b), minC = Math.min(r,g,b);
+    const s = maxC === 0 ? 0 : Math.round((maxC - minC) / maxC * 100);
+    let h = 0;
+    if (maxC !== minC) {
+      if (maxC === r) h = (60 * (g - b) / (maxC - minC) + 360) % 360;
+      else if (maxC === g) h = 60 * (b - r) / (maxC - minC) + 120;
+      else h = 60 * (r - g) / (maxC - minC) + 240;
+    }
+    $('clr-h').textContent = Math.round(h) + '°';
+    $('clr-s').textContent = s + '%';
+
+    // Ultrasonic
+    const dist = (10 + Math.abs(Math.sin(tick * 0.03) * 90)).toFixed(1);
+    $('hs-us').textContent = dist + ' cm';
+    $('us-dist').textContent = dist + ' cm';
+
+    // Miniature switch (D2)
+    const pressed = (Math.floor(tick / 12) % 3) === 0;
+    const stateStr = pressed ? tr('state_pressed') : tr('state_released');
+    $('hs-d2').textContent = stateStr;
+    $('sw-state').textContent = stateStr;
+
+    // Gray scale (A1)
+    const refl = Math.round(50 + Math.sin(tick * 0.04) * 40);
+    $('hs-a1').textContent = refl + '%';
+    $('gs-refl').textContent = refl + '%';
+    $('gs-raw').textContent = Math.round(refl / 100 * 1023);
+
+    // Raw digital (D1, D3, D4)
+    for (const p of ['d1','d3','d4']) {
+      const a = (Math.floor(tick / 15) % 2);
+      const b = (Math.floor(tick / 23) % 2);
+      $('hs-' + p).textContent = `A:${a} B:${b}`;
+    }
+
+    // Raw analog (A2, A3)
+    for (const p of ['a2','a3']) {
+      const a = Math.round(512 + 400 * Math.sin(tick * 0.05));
+      const b = Math.round(512 + 400 * Math.cos(tick * 0.05));
+      $('hs-' + p).textContent = `${a} / ${b}`;
+    }
+
+    // Motors / encoders
+    for (let m = 1; m <= 4; m++) {
+      const rpm = Math.round(Math.sin(tick * 0.02 + m) * 60);
+      $('hs-m' + m).textContent = `${rpm} rpm`;
+    }
+
+    // Buttons
+    $('hs-btnUp').textContent = ((Math.floor(tick / 25) % 2) === 0)
+      ? tr('state_pressed') : tr('state_released');
+    $('hs-btnDn').textContent = ((Math.floor(tick / 40) % 2) === 1)
+      ? tr('state_pressed') : tr('state_released');
+
+    // IMU
+    $('tbl-ax').textContent = (Math.sin(tick * 0.03) * 0.15).toFixed(2);
+    $('tbl-ay').textContent = (Math.cos(tick * 0.03) * 0.15).toFixed(2);
+    $('tbl-az').textContent = (9.81 + Math.sin(tick * 0.1) * 0.05).toFixed(2);
+    $('tbl-gx').textContent = (Math.sin(tick * 0.07) * 2).toFixed(2);
+    $('tbl-gy').textContent = (Math.cos(tick * 0.07) * 2).toFixed(2);
+    $('tbl-gz').textContent = (Math.sin(tick * 0.11) * 1).toFixed(2);
+  }
+
+  // Hotspot <-> side card interaction
+  document.querySelectorAll('.hotspot').forEach(h => {
+    h.addEventListener('click', () => {
+      const id = h.dataset.id;
+      document.querySelectorAll('.hotspot.selected, .sensor-card.selected')
+        .forEach(el => el.classList.remove('selected'));
+      h.classList.add('selected');
+      const card = document.querySelector(`.sensor-card[data-detail-for="${id}"]`);
+      if (card) {
+        card.classList.add('selected');
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  });
+
+  $('btnReturn').addEventListener('click', () => {
+    if (window.confirm(tr('return_confirm'))) {
+      $('expl-status').textContent = tr('restoring');
+      $('expl-status').classList.remove('live');
+    }
+  });
+
+  // Apply strings before starting the mock feed to avoid an English flash
+  // for pt-BR users. Then run the ticker at 10 Hz.
+  applyExplorerStrings();
+  setInterval(mockTick, 100);
+})();
+</script>
+
+</body>
+</html>

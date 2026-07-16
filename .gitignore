@@ -37,11 +37,24 @@
 !resources/app_src/blockly-core/blocks/_mini.js
 !resources/app_src/views/
 !resources/app_src/views/main.html
+!resources/app_src/views/hardware_explorer.html
 
 # New pt-BR block examples (folder did not exist in the upstream app)
 !arduino/
 !arduino/blocks_examples/
 !arduino/blocks_examples/pt-BR/
+
+# Hardware Explorer sketch (uploaded on demand by the desktop app)
+!arduino/explorer_sketch/
+!arduino/explorer_sketch/*.ino
+
+# Layout assets for the Hardware Explorer panel
+!resources/app_src/assets/
+!resources/app_src/assets/*.png
+!resources/app_src/assets/*.svg
+!resources/app_src/assets/*.jpg
+# Reference material extracted from proprietary Matrix guidebooks — never commit
+resources/app_src/assets/pdf_extract/
 
 # Upstream examples (already shipped in the app; no need to version them)
 arduino/blocks_examples/en/
