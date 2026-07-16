@@ -6,7 +6,38 @@ Based on upstream v1.0.8. Format loosely inspired by
 
 ---
 
-## [Unreleased]
+## [v3.4-stable] — 2026-07-16
+
+### Added
+- **Recent Files** section in the File menu. Records the last 10 file
+  paths the user actually opens or saves (localStorage key
+  `astro-recent-v1`) and shows the top 5 as clickable entries between
+  Export as .ino and the Update FW divider. Clicking one reads the
+  file with `fs.readFileSync` and reuses the Ctrl+O flow so it lands
+  in a new tab. Missing paths are dropped from the list with a
+  SweetAlert explaining what happened. Bilingual (EN + pt-BR).
+- **`INSTALL.md`** — end-user walkthrough for applying the fork to a
+  clean v1.0.8 install. Covers backup, `app_src` copy, patcher run,
+  verification, rollback, and the common errors (BOM, EBUSY,
+  double-patch).
+- **`RELEASE.md`** — maintainer-facing setup guide for the CI
+  pipeline: private vendor repo, fine-grained PAT, Actions
+  secrets/variables, per-tag release checklist.
+- **CI release workflow** (`.github/workflows/release.yml`). On any
+  `v*` tag push, fetches the pristine v1.0.8 `app.asar` from a private
+  vendor repo, runs `patch_asar.js` against it, and attaches the
+  patched `app.asar` to the release. End users can install by
+  downloading one file instead of running Node locally.
+
+### Changed
+- `patch_asar.js` now reads `BACKUP`, `OUT`, and `SRC_DIR` from env
+  vars (`ASAR_BACKUP`, `ASAR_OUT`, `ASAR_SRC_DIR`) with the previous
+  Windows install paths as fallbacks. Local rebuilds keep working
+  with zero config; CI points at repo-relative paths.
+
+---
+
+## [v3.3-stable] — 2026-07-15
 
 ### Added
 - Bilingual C++ code mode (per-tab writable Monaco editor). Toggle
