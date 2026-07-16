@@ -59,7 +59,11 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF#refs/tags/}"
+          # Pretty title: "v3.4-stable" -> "AstroGenius v3.4 stable"
+          TITLE="AstroGenius ${TAG//-/ }"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --generate-notes
+            gh release create "$TAG" --title "$TITLE" --generate-notes
+          else
+            gh release edit "$TAG" --title "$TITLE"
           fi
           gh release upload "$TAG" resources/app.asar --clobber
