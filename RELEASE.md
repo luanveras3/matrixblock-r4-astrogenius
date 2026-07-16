@@ -25,7 +25,10 @@ no source, no history, just the binary.
 
 1. From a clean v1.0.8 install, grab `C:\matrixblock-r4\resources\app.asar`.
 2. In the private repo, create a release with tag `v1.0.8`.
-3. Attach the `app.asar` file (keep the filename `app.asar`).
+3. Attach the file as an asset. The filename you upload becomes the
+   asset name — pick whatever you want and match `BAK_ASSET` (below) to it.
+   The bundled workflow uses `app.asar.bak` because that's the local
+   backup name.
 
 If a newer upstream version ships later (say v1.0.9), add a new
 release in the private repo with tag `v1.0.9` and update the
@@ -63,7 +66,7 @@ On `luanveras3/matrixblock-r4-astrogenius`, go to
 | ----------- | -------------------------------------- |
 | `BAK_REPO`  | `luanveras3/matrixblock-r4-bak`        |
 | `BAK_TAG`   | `v1.0.8`                               |
-| `BAK_ASSET` | `app.asar`                             |
+| `BAK_ASSET` | `app.asar.bak`                         |
 
 Variables (not secrets) are used because they aren't sensitive and
 show up clearly in the workflow logs when debugging.
