@@ -1,12 +1,24 @@
 # Installing AstroGenius v3.4.1 on a fresh MATRIXblock Mini R4
 
 Step-by-step guide for applying the AstroGenius fork (built on top of
-MATRIXblock Mini R4 v1.0.8) to a clean install. Tested on Windows 11
-with Node 24.
+MATRIXblock Mini R4 v1.0.8) to a clean install. Primary walkthrough
+tested on Windows 11 with Node 24; supplementary notes for macOS and
+Linux are at the end of this document.
 
 The release notes mention `npm install`, but `patch_asar.js` only uses
 `fs` and `path` from the Node standard library — **npm is optional**
 and only needed if you want to run the Playwright smoke test.
+
+## Two ways to install
+
+1. **Fast — drop-in `app.asar`** (no dependencies). Download the
+   pre-patched `app.asar` from the latest GitHub release and swap it
+   into the app's `resources/` directory. Works on any OS where the
+   MATRIXblock Mini R4 app runs. See [Fast install](#fast-install-drop-in-appasar)
+   below.
+2. **Detailed — rebuild from source** (git clone + Node). Everything
+   from Step 1 through Step 6 below. Recommended if you want to
+   inspect or modify the fork before installing.
 
 ---
 
@@ -218,3 +230,171 @@ Copy-Item C:\matrixblock-r4\resources\app.asar C:\matrixblock-r4\resources\app.a
 Copy-Item C:\astrogenius-work\src\resources\app_src C:\matrixblock-r4\resources\app_src -Recurse -Force; `
 node C:\astrogenius-work\src\patch_asar.js
 ```
+
+---
+
+## Fast install (drop-in `app.asar`)
+
+The CI pipeline attaches a pre-patched `app.asar` to every tagged
+release, so anyone who does not want to install Node can just download
+one file and drop it into `resources/`. The `app.asar` itself is
+platform-agnostic — the fork is pure JavaScript / HTML / CSS bundled
+through the existing asar pipeline, so the same file works on any OS
+where MATRIXblock Mini R4 runs.
+
+**All platforms**:
+
+1. **Close the app.** While it is running the OS keeps `app.asar`
+   locked and the copy silently fails.
+2. **Download** the pre-patched `app.asar` from the latest release:
+   https://github.com/luanveras3/matrixblock-r4-astrogenius/releases
+3. **Back up** the current `app.asar` (rename to `app.asar.bak`).
+4. **Overwrite** `app.asar` with the downloaded file.
+5. **Reopen the app.** Verify per Step 6 above.
+
+Rolling back is the same swap in reverse (rename `.bak` back over
+`app.asar`).
+
+`app.asar` lives at:
+
+- **Windows**: `C:\matrixblock-r4\resources\app.asar`
+- **macOS**: `/Applications/MATRIXblock Mini R4.app/Contents/Resources/app.asar`
+  (Finder: right-click the `.app` bundle → *Show Package Contents*)
+- **Linux**: depends on how the app was packaged — see the
+  [Linux notes](#linux) below.
+
+---
+
+## macOS
+
+The whole walkthrough above applies with three substitutions:
+
+- Working directory: use `~/astrogenius-work/src` (or any writable path)
+  instead of `C:\astrogenius-work\src`.
+- App install path: `/Applications/MATRIXblock Mini R4.app/Contents/Resources/`
+  instead of `C:\matrixblock-r4\resources\`.
+- Shell: run everything from Terminal (bash or zsh). Replace the
+  PowerShell `Copy-Item` calls with `cp` / `cp -R`.
+
+Example equivalent of Steps 2–4:
+
+```bash
+# Step 2 — back up the pristine app.asar
+cp "/Applications/MATRIXblock Mini R4.app/Contents/Resources/app.asar" \
+   "/Applications/MATRIXblock Mini R4.app/Contents/Resources/app.asar.bak"
+
+# Step 3 — stage patched sources (edit patch_asar.js paths OR use env vars)
+cp -R ~/astrogenius-work/src/resources/app_src \
+      "/Applications/MATRIXblock Mini R4.app/Contents/Resources/app_src"
+
+# Step 4 — run the patcher pointing at the .app bundle
+ASAR_BACKUP="/Applications/MATRIXblock Mini R4.app/Contents/Resources/app.asar.bak" \
+ASAR_OUT="/Applications/MATRIXblock Mini R4.app/Contents/Resources/app.asar" \
+ASAR_SRC_DIR="/Applications/MATRIXblock Mini R4.app/Contents/Resources/app_src" \
+node ~/astrogenius-work/src/patch_asar.js
+```
+
+`patch_asar.js` accepts the three `ASAR_*` environment variables as
+overrides (they are the same knob CI uses), so no need to edit the
+file.
+
+### Gatekeeper / code signing
+
+If MATRIX ships a codesigned `.app`, replacing `app.asar` invalidates
+the bundle signature. macOS will then either refuse to launch the app
+or throw a "damaged and can't be opened" error. Two fixes, from
+least invasive to most:
+
+1. **Remove quarantine attributes** (preferred; needed once per
+   modified bundle):
+
+   ```bash
+   xattr -cr "/Applications/MATRIXblock Mini R4.app"
+   ```
+
+2. **Ad-hoc re-sign the bundle** if the launch is still blocked:
+
+   ```bash
+   codesign --deep --force --sign - "/Applications/MATRIXblock Mini R4.app"
+   ```
+
+The drop-in flow needs the same fix — anything that modifies the
+signed bundle triggers Gatekeeper.
+
+### Permissions
+
+`/Applications/` is writable by admin users but the app bundle itself
+may need `sudo` if it was installed by another account. Prefix `cp` /
+the `node` command with `sudo` if you hit "Permission denied".
+
+---
+
+## Linux
+
+Path layout depends on how MATRIXblock Mini R4 was packaged. The two
+common cases:
+
+**Native installer (`.deb`, `.rpm`, tarball)**
+
+App usually unpacks under `/opt/` or `/usr/lib/`. The `app.asar` sits
+next to the app's launcher inside `resources/`:
+
+```
+/opt/matrixblock-mini-r4/resources/app.asar
+```
+
+Everything from Steps 2–4 works the same way as macOS — substitute the
+path and use `ASAR_BACKUP` / `ASAR_OUT` / `ASAR_SRC_DIR` env vars:
+
+```bash
+sudo cp /opt/matrixblock-mini-r4/resources/app.asar{,.bak}
+sudo cp -R ~/astrogenius-work/src/resources/app_src /opt/matrixblock-mini-r4/resources/
+sudo ASAR_BACKUP=/opt/matrixblock-mini-r4/resources/app.asar.bak \
+     ASAR_OUT=/opt/matrixblock-mini-r4/resources/app.asar \
+     ASAR_SRC_DIR=/opt/matrixblock-mini-r4/resources/app_src \
+     node ~/astrogenius-work/src/patch_asar.js
+```
+
+**AppImage**
+
+AppImages are read-only squashfs bundles; you cannot patch `app.asar`
+in place. Extract, patch, then relaunch from the extracted directory:
+
+```bash
+./MATRIXblock-Mini-R4.AppImage --appimage-extract
+cp squashfs-root/resources/app.asar squashfs-root/resources/app.asar.bak
+cp -R ~/astrogenius-work/src/resources/app_src squashfs-root/resources/
+ASAR_BACKUP=squashfs-root/resources/app.asar.bak \
+ASAR_OUT=squashfs-root/resources/app.asar \
+ASAR_SRC_DIR=squashfs-root/resources/app_src \
+node ~/astrogenius-work/src/patch_asar.js
+./squashfs-root/AppRun
+```
+
+Repacking the AppImage after patching is possible with `appimagetool`
+but usually unnecessary — running `AppRun` directly gives the same
+user experience.
+
+### Serial port permissions
+
+Uploading sketches requires read/write access to the serial device
+(e.g. `/dev/ttyACM0`). If the app cannot find the board, add your user
+to the `dialout` group and log back in:
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+This is a MATRIXblock v1.0.8 requirement, not something the fork
+introduces — mentioned here only because it is the most common
+"install worked, board not found" issue on a fresh Linux setup.
+
+---
+
+## Contributing platform docs
+
+The macOS and Linux sections above are best-effort based on the shape
+of the Windows install. If you install on either platform and find
+that a path is different or a step is missing, a PR against this
+document is welcome — the fork is designed to be OS-neutral and we
+want the docs to reflect that.
