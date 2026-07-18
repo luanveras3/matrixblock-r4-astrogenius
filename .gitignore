@@ -47,3 +47,18 @@
 arduino/blocks_examples/en/
 arduino/blocks_examples/zh-cn/
 arduino/blocks_examples/zh-tw/
+
+# --- BLE runtime library + IDE patch (2026-07-18 session) ---
+# Firmware library that turns any USB-flashed sketch into a wireless
+# bytecode target, plus the Blockly generator + Web Bluetooth uploader
+# that live inside the IDE. See:
+#   arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/SESSION_2026-07-18_ALWAYS_ON_BLE.md
+!arduino/libraries/
+!arduino/libraries/MatrixMiniR4/
+!arduino/libraries/MatrixMiniR4/src/
+!arduino/libraries/MatrixMiniR4/src/Modules/
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4BLERuntime.h
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4BLERuntime.cpp
+!arduino/libraries/MatrixMiniR4/examples/
+!arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/
+!arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/**

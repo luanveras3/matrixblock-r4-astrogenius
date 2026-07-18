@@ -1,0 +1,364 @@
+/**
+ * @file MiniR4BLERuntime.cpp
+ * @brief Implementation of the always-on BLE bytecode runtime.
+ *
+ * Historical note: this code is a refactor of the standalone
+ * examples/6-VM Runtime/MiniR4_BLE_Runtime/MiniR4_BLE_Runtime.ino sketch,
+ * repackaged as a library so it can be composed with any user sketch.
+ * Protocol, LED indicator, and dataflash layout are unchanged.
+ */
+#include "MiniR4BLERuntime.h"
+
+#include "MatrixMiniR4.h"
+#include "DataFlashBlockDevice.h"
+#include <ArduinoBLE.h>
+
+// --- Sizing constants (must match the runtime protocol on the client side) --
+namespace {
+
+constexpr uint16_t MAX_PROGRAM     = 4096;
+constexpr uint16_t HEADER_SIZE     = 8;
+constexpr uint32_t DATAFLASH_BLOCK = 1024;
+constexpr uint32_t DATAFLASH_BASE  = 1024;                      // start of block 1
+constexpr uint32_t ENABLE_FLAG_ADDR = DATAFLASH_BASE + 4 * DATAFLASH_BLOCK; // block 5
+constexpr uint8_t  MAGIC[4]        = {'M', 'B', 'R', '4'};
+constexpr uint8_t  STEPS_PER_POLL  = 32;
+constexpr uint32_t TOGGLE_HOLD_MS  = 3000;
+
+enum : uint8_t {
+    CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END = 0x03,
+    CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06, CMD_INFO = 0x07,
+    RSP_ACK   = 0xA0, RSP_STATE = 0xA1,
+};
+
+// storageBuf holds both the on-flash header and the program payload. Keeping
+// them contiguous lets us persist in a single program() call. alignas(4) is
+// required by the RA4M1 data flash controller.
+alignas(4) uint8_t g_storageBuf[HEADER_SIZE + MAX_PROGRAM];
+uint8_t* const g_programBuf = g_storageBuf + HEADER_SIZE;
+
+// ArduinoBLE service/characteristic objects. File-scope so their lifetime
+// matches the BLE stack (they are added to the stack once in begin()).
+BLEService        g_uartService("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
+BLECharacteristic g_rxChar     ("6E400002-B5A3-F393-E0A9-E50E24DCCA9E", BLEWrite, 128);
+BLECharacteristic g_txChar     ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E", BLERead | BLENotify, 32);
+
+DataFlashBlockDevice& g_flash = DataFlashBlockDevice::getInstance();
+
+MiniR4BLERuntimeClass* g_instance = nullptr;   // for the BLE C callback
+
+inline uint32_t roundUp4(uint32_t v) { return (v + 3u) & ~3u; }
+
+}  // namespace
+
+// --- The singleton instance -------------------------------------------------
+
+MiniR4BLERuntimeClass BLERuntime;
+
+// --- Construction -----------------------------------------------------------
+
+MiniR4BLERuntimeClass::MiniR4BLERuntimeClass()
+    : _programSize(0)
+    , _receiveExpected(0)
+    , _receiveOffset(0)
+    , _wasRunning(false)
+    , _bleActive(false)
+    , _bleEnabled(true)     // default; begin() reads real value from flash
+    , _begun(false)
+    , _currentLedState(0xFF)
+    , _bothButtonsSince(0)
+    , _gestureLatched(false)
+{
+    g_instance = this;
+}
+
+bool MiniR4BLERuntimeClass::isRunningVM() const
+{
+    return _vm.isRunning();
+}
+
+// --- Public API -------------------------------------------------------------
+
+void MiniR4BLERuntimeClass::begin()
+{
+    if (_begun) return;
+    _begun = true;
+
+    _bleEnabled = _readEnableFlag();
+
+    if (_loadFromFlash() && _programSize > 0) {
+        _vm.loadProgram(g_programBuf, _programSize);
+        _vm.halt();   // program loaded but not auto-run
+    }
+
+    if (!_bleEnabled) {
+        // BLE disabled by flag. VM still runs if a program is stored, but no
+        // wireless upload is possible until the user re-enables via the
+        // button gesture. That gesture is checked in poll().
+        return;
+    }
+
+    if (!BLE.begin()) {
+        // BLE hardware init failed. Fall through -- the runtime will keep
+        // trying on subsequent begin() calls if the user retries.
+        return;
+    }
+    BLE.setLocalName("MATRIX-R4-Runtime");
+    BLE.setAdvertisedService(g_uartService);
+    g_uartService.addCharacteristic(g_rxChar);
+    g_uartService.addCharacteristic(g_txChar);
+    BLE.addService(g_uartService);
+    g_rxChar.setEventHandler(BLEWritten,
+        [](BLEDevice, BLECharacteristic ch) {
+            if (g_instance) {
+                g_instance->_onRxWriteImpl(ch.value(), ch.valueLength());
+            }
+        });
+    BLE.advertise();
+    _bleActive = true;
+}
+
+void MiniR4BLERuntimeClass::poll()
+{
+    _checkToggleGesture();
+
+    if (_bleActive) BLE.poll();
+
+    const bool nowRunning = _vm.isRunning();
+    if (nowRunning) {
+        for (uint8_t i = 0; i < STEPS_PER_POLL && _vm.isRunning(); ++i) _vm.step();
+        _updateLed(2);
+    } else {
+        if (_wasRunning && _bleActive) _sendState();
+        _updateLed(_programSize > 0 ? 1 : 0);
+    }
+    _wasRunning = nowRunning;
+}
+
+void MiniR4BLERuntimeClass::setBLEEnabled(bool enabled)
+{
+    if (enabled == _bleEnabled) return;
+    _writeEnableFlag(enabled);
+    _bleEnabled = enabled;
+    _flashLedFeedback(enabled);
+    // The BLE stack state cannot be flipped mid-run without a restart. We
+    // set the flag now; the change takes effect on next boot.
+}
+
+// --- Button-gesture toggle --------------------------------------------------
+
+void MiniR4BLERuntimeClass::_checkToggleGesture()
+{
+    const bool upHeld   = MiniR4.BTN_UP.getState();
+    const bool downHeld = MiniR4.BTN_DOWN.getState();
+    const bool both     = upHeld && downHeld;
+    const uint32_t now  = millis();
+
+    if (!both) {
+        _bothButtonsSince = 0;
+        _gestureLatched   = false;
+        return;
+    }
+    if (_bothButtonsSince == 0) {
+        _bothButtonsSince = now;
+        return;
+    }
+    if (_gestureLatched) return;
+    if (now - _bothButtonsSince < TOGGLE_HOLD_MS) return;
+
+    // 3 seconds elapsed with both held -- toggle.
+    _gestureLatched = true;
+    setBLEEnabled(!_bleEnabled);
+}
+
+void MiniR4BLERuntimeClass::_flashLedFeedback(bool enabling)
+{
+    const uint8_t r = enabling ? 0   : 60;
+    const uint8_t g = enabling ? 60  : 0;
+    const uint8_t b = 0;
+    for (uint8_t i = 0; i < 3; ++i) {
+        MiniR4.LED.setColor(1, r, g, b);
+        delay(120);
+        MiniR4.LED.setColor(1, 0, 0, 0);
+        delay(120);
+    }
+    _currentLedState = 0xFF;  // force re-apply on next poll()
+}
+
+// --- LED indicator ----------------------------------------------------------
+// 0=red (no program), 1=blue (loaded/idle), 2=green (running).
+
+void MiniR4BLERuntimeClass::_updateLed(uint8_t state)
+{
+    if (state == _currentLedState) return;
+    _currentLedState = state;
+    switch (state) {
+        case 0: MiniR4.LED.setColor(1, 60,  0,  0); break;
+        case 1: MiniR4.LED.setColor(1,  0,  0, 60); break;
+        case 2: MiniR4.LED.setColor(1,  0, 60,  0); break;
+    }
+}
+
+// --- Dataflash persistence --------------------------------------------------
+// Uses raw DataFlashBlockDevice (bypasses vEEPROM wear-leveling). Erases
+// whole blocks and programs header+payload in one shot. The driver has a
+// bug where multi-block erases only erase the first block, so we erase
+// block-by-block explicitly.
+
+bool MiniR4BLERuntimeClass::_loadFromFlash()
+{
+    uint8_t header[HEADER_SIZE];
+    if (g_flash.read(header, DATAFLASH_BASE, HEADER_SIZE) != 0) return false;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (header[i] != MAGIC[i]) return false;
+    }
+    uint32_t sz = (uint32_t)header[4]
+                | ((uint32_t)header[5] << 8)
+                | ((uint32_t)header[6] << 16)
+                | ((uint32_t)header[7] << 24);
+    if (sz == 0 || sz > MAX_PROGRAM) return false;
+
+    memcpy(g_storageBuf, header, HEADER_SIZE);
+    if (g_flash.read(g_programBuf, DATAFLASH_BASE + HEADER_SIZE, sz) != 0) return false;
+
+    _programSize = (uint16_t)sz;
+    return true;
+}
+
+bool MiniR4BLERuntimeClass::_persistToFlash()
+{
+    memcpy(g_storageBuf, MAGIC, 4);
+    g_storageBuf[4] = (uint8_t)( _programSize        & 0xFF);
+    g_storageBuf[5] = (uint8_t)((_programSize >> 8) & 0xFF);
+    g_storageBuf[6] = 0;
+    g_storageBuf[7] = 0;
+
+    const uint32_t writeSize = roundUp4((uint32_t)HEADER_SIZE + _programSize);
+    const uint32_t blocks    = (writeSize + DATAFLASH_BLOCK - 1) / DATAFLASH_BLOCK;
+
+    for (uint32_t b = 0; b < blocks; ++b) {
+        if (g_flash.erase(DATAFLASH_BASE + b * DATAFLASH_BLOCK,
+                          DATAFLASH_BLOCK) != 0) return false;
+    }
+    return (g_flash.program(g_storageBuf, DATAFLASH_BASE, writeSize) == 0);
+}
+
+bool MiniR4BLERuntimeClass::_eraseFlash()
+{
+    // Wiping block 1 alone is enough -- the magic disappears, so any future
+    // _loadFromFlash() call returns false.
+    _programSize = 0;
+    return (g_flash.erase(DATAFLASH_BASE, DATAFLASH_BLOCK) == 0);
+}
+
+// --- Enable-flag storage (block 5) ------------------------------------------
+// Fresh flash reads back as 0xFF, which we interpret as "enabled" so a
+// brand-new R4 boots with BLE on by default. Writing 0x00 disables it.
+
+bool MiniR4BLERuntimeClass::_readEnableFlag()
+{
+    uint8_t v = 0xFF;
+    if (g_flash.read(&v, ENABLE_FLAG_ADDR, 1) != 0) return true;
+    return v != 0x00;
+}
+
+void MiniR4BLERuntimeClass::_writeEnableFlag(bool enabled)
+{
+    // Erase the whole block, then program a single 4-byte word at offset 0.
+    // Alignment: the RA4M1 dataflash needs 4-byte-aligned programming.
+    if (g_flash.erase(ENABLE_FLAG_ADDR, DATAFLASH_BLOCK) != 0) return;
+    if (enabled) return;   // erased = 0xFF everywhere = enabled; no write needed
+    alignas(4) uint8_t word[4] = {0x00, 0xFF, 0xFF, 0xFF};
+    (void)g_flash.program(word, ENABLE_FLAG_ADDR, sizeof(word));
+}
+
+// --- BLE responses ----------------------------------------------------------
+
+void MiniR4BLERuntimeClass::_sendAck(uint8_t cmd, uint8_t status)
+{
+    uint8_t buf[3] = {RSP_ACK, cmd, status};
+    g_txChar.writeValue(buf, 3);
+}
+
+void MiniR4BLERuntimeClass::_sendState()
+{
+    const uint16_t pc = _vm.pc();
+    uint8_t buf[7] = {
+        RSP_STATE,
+        (uint8_t)(_vm.isRunning() ? 1 : 0),
+        (uint8_t)(pc & 0xFF),
+        (uint8_t)((pc >> 8) & 0xFF),
+        (uint8_t)_vm.lastError(),
+        (uint8_t)(_programSize & 0xFF),
+        (uint8_t)((_programSize >> 8) & 0xFF),
+    };
+    g_txChar.writeValue(buf, 7);
+}
+
+// --- Command handler --------------------------------------------------------
+
+void MiniR4BLERuntimeClass::_onRxWriteImpl(const uint8_t* data, int len)
+{
+    if (len < 1) return;
+    const uint8_t cmd = data[0];
+
+    switch (cmd) {
+        case CMD_START:
+            if (len < 3) { _sendAck(cmd, 1); return; }
+            _receiveExpected = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
+            if (_receiveExpected == 0 || _receiveExpected > MAX_PROGRAM) {
+                _sendAck(cmd, 2); return;
+            }
+            _receiveOffset = 0;
+            _vm.halt();
+            _sendAck(cmd, 0);
+            break;
+
+        case CMD_CHUNK: {
+            const uint16_t chunkLen = (uint16_t)(len - 1);
+            if (_receiveOffset + chunkLen > _receiveExpected) { _sendAck(cmd, 1); return; }
+            memcpy(g_programBuf + _receiveOffset, data + 1, chunkLen);
+            _receiveOffset += chunkLen;
+            _sendAck(cmd, 0);
+            break;
+        }
+
+        case CMD_END: {
+            if (_receiveOffset != _receiveExpected) { _sendAck(cmd, 1); return; }
+            _programSize = _receiveExpected;
+            const bool ok = _persistToFlash();
+            _vm.loadProgram(g_programBuf, _programSize);
+            _vm.halt();   // wait for CMD_RUN
+            _sendAck(cmd, ok ? 0 : 2);
+            break;
+        }
+
+        case CMD_RUN:
+            if (_programSize == 0) { _sendAck(cmd, 1); return; }
+            _vm.loadProgram(g_programBuf, _programSize);
+            _sendAck(cmd, 0);
+            break;
+
+        case CMD_STOP:
+            _vm.halt();
+            _sendAck(cmd, 0);
+            _sendState();
+            break;
+
+        case CMD_ERASE: {
+            _vm.halt();
+            const bool ok = _eraseFlash();
+            _sendAck(cmd, ok ? 0 : 2);
+            break;
+        }
+
+        case CMD_INFO:
+            _sendAck(cmd, 0);
+            _sendState();
+            break;
+
+        default:
+            _sendAck(cmd, 0xFF);
+            break;
+    }
+}

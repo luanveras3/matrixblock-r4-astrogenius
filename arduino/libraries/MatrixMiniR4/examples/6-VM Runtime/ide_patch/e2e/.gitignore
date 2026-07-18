@@ -1,0 +1,12 @@
+# Playwright dependency install
+node_modules/
+package.json
+package-lock.json
+
+# arduino-cli leaks if a test forgets to set CWD
+inventory.yaml
+library_index.*
+package_index.*
+packages/
+staging/
+tmp/
