@@ -97,6 +97,18 @@ goog.require('Blockly.Arduino');
         return null;
     }
 
+    // Rewrite every `delay(N)` call in `src` to `BLERuntime.delay(N)` so the
+    // BLE stack stays serviced while the user code sleeps. Word-boundary + a
+    // lookbehind for a non-`.` character make sure we don't touch identifiers
+    // like `myDelay(500)` or attribute accesses like `foo.delay(1)`.
+    // Case-sensitive so `Delay(...)` (some libraries) is left alone.
+    function rewriteDelays(src) {
+        if (!src) return src;
+        return src.replace(
+            /(^|[^A-Za-z0-9_.])delay(\s*\()/g,
+            '$1BLERuntime.delay$2');
+    }
+
     function wrapWithBLERuntime(src) {
         if (!src) return src;
 
@@ -170,11 +182,12 @@ goog.require('Blockly.Arduino');
             '  if (!BLERuntime.isRunningVM()) { userLoop(); }\n' +
             '}\n';
 
-        return head + userSetup + userLoop + driver;
+        return rewriteDelays(head + userSetup + userLoop + driver);
     }
 
     // Expose for testing.
     Blockly.Arduino.__wrapWithBLERuntime = wrapWithBLERuntime;
+    Blockly.Arduino.__rewriteDelays      = rewriteDelays;
 
     console.log('[BLE wrapper] Blockly.Arduino.finish patched.');
 })();

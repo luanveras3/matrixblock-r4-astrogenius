@@ -170,6 +170,29 @@ void MiniR4BLERuntimeClass::poll()
     _wasRunning = nowRunning;
 }
 
+void MiniR4BLERuntimeClass::delay(uint32_t ms)
+{
+    // BLE not up (kill switch, or begin() never called): behave like
+    // Arduino's global delay(). Explicit ::delay() reaches the free function
+    // even though this method shares its name.
+    if (!_bleActive) { ::delay(ms); return; }
+
+    constexpr uint32_t SLICE_MS = 5;
+    const uint32_t start = millis();
+    while ((uint32_t)(millis() - start) < ms) {
+        poll();
+        // A BLE upload that arrived during this delay may have started the
+        // VM. The wrapper's top-level loop() skips userLoop() while the VM
+        // runs, so returning early here lets that skip take effect on the
+        // very next tick instead of after the full ms.
+        if (_vm.isRunning()) return;
+        const uint32_t elapsed  = (uint32_t)(millis() - start);
+        if (elapsed >= ms) return;
+        const uint32_t remaining = ms - elapsed;
+        ::delay(remaining < SLICE_MS ? remaining : SLICE_MS);
+    }
+}
+
 void MiniR4BLERuntimeClass::setBLEEnabled(bool enabled)
 {
     if (enabled == _bleEnabled) return;

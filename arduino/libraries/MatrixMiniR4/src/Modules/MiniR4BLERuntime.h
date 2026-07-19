@@ -65,6 +65,22 @@ public:
      */
     void poll();
 
+    /**
+     * @brief BLE-safe drop-in replacement for Arduino's global delay().
+     *
+     * Sleeps for `ms` milliseconds while calling poll() in ~5 ms slices so
+     * ATT events stay serviced and pending uploads can be received. The IDE
+     * wrapper rewrites every user-visible delay(N) call into
+     * BLERuntime.delay(N) so student sketches never starve the BLE stack.
+     *
+     * Semantics:
+     *  - If the BLE stack failed to come up (or was disabled by the kill
+     *    switch), degrades to raw delay(ms).
+     *  - If a bytecode upload arrives mid-delay and starts the VM, returns
+     *    early. The caller's userLoop() then gets skipped by the wrapper.
+     */
+    void delay(uint32_t ms);
+
     /** @return true while bytecode is executing on the VM. */
     bool isRunningVM() const;
 

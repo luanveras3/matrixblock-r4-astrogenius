@@ -75,10 +75,12 @@ if (/void loop\(\)\s*\n\{\s*\n\s*BLERuntime\.poll\(\);\s*\n\s*if \(!BLERuntime\.
 else no('driver loop malformed');
 
 // ---- 3. User's original code lives inside userSetup/userLoop -------------
+// delay() gets rewritten to BLERuntime.delay() (see test group 7); everything
+// else must survive verbatim.
 if (wrapped.indexOf('MiniR4.begin(3);') >= 0
     && wrapped.indexOf('MiniR4.LED.setColor(1, 255, 0, 0);') >= 0
-    && wrapped.indexOf('delay(500);') >= 0)
-    ok('user body preserved verbatim');
+    && wrapped.indexOf('BLERuntime.delay(500);') >= 0)
+    ok('user body preserved (delay rewritten)');
 else no('user body altered');
 
 // ---- 4. Idempotency ------------------------------------------------------
@@ -130,6 +132,52 @@ const nested = A.finish('');
 if (nested.indexOf('while (true) { foo(); }') >= 0)
     ok('non-outer while(true) preserved');
 else no('should not have touched inner while(true)');
+
+// ---- 7. delay() -> BLERuntime.delay() rewrite ----------------------------
+// The unit under test is __rewriteDelays. This isolates the substitution
+// from the rest of the wrap so a regression here doesn't hide behind the
+// other checks.
+const rw = A.__rewriteDelays;
+
+if (rw('delay(500);') === 'BLERuntime.delay(500);')
+    ok('rewrites bare delay call');
+else no('bare delay not rewritten: ' + rw('delay(500);'));
+
+if (rw('  delay ( 250 );\n') === '  BLERuntime.delay ( 250 );\n')
+    ok('rewrites delay with whitespace inside call');
+else no('whitespace delay not rewritten: ' + rw('  delay ( 250 );\n'));
+
+// Multiple calls on one line, both should flip.
+if (rw('delay(1); do(); delay(2);') === 'BLERuntime.delay(1); do(); BLERuntime.delay(2);')
+    ok('rewrites every delay in a line');
+else no('multi-delay not rewritten: ' + rw('delay(1); do(); delay(2);'));
+
+// False positives that must NOT flip:
+const untouched = [
+    'myDelay(500);',                          // identifier ending in delay
+    'noDelay(1);',                            // ditto
+    'foo.delay(1);',                          // method access on a member
+    'Delay(1);',                              // capital D (some libs)
+    'DELAY(1);',                              // ALL CAPS
+    'delayMicroseconds(500);',                // Arduino sibling function
+    'blockDelay = 500;',                      // variable name containing "delay"
+];
+for (const s of untouched) {
+    if (rw(s) === s) ok('does not touch: ' + s);
+    else no('wrongly rewrote "' + s + '" -> "' + rw(s) + '"');
+}
+
+// Line-start delay should still get rewritten.
+if (rw('delay(10);') === 'BLERuntime.delay(10);')
+    ok('rewrites delay at start of input');
+else no('start-of-input delay skipped: ' + rw('delay(10);'));
+
+// Idempotent: applying twice shouldn't produce BLERuntime.BLERuntime.delay.
+const once = rw('delay(500);\n');
+const twiceRw = rw(once);
+if (twiceRw === 'BLERuntime.delay(500);\n')
+    ok('rewrite is idempotent');
+else no('rewrite not idempotent: ' + twiceRw);
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\n' + pass + '/' + pass + ' passed');
 process.exitCode = fail ? 1 : 0;
