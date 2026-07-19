@@ -127,7 +127,7 @@ public:
 private:
     void _checkToggleGesture();
     void _flashLedFeedback(bool enabling);
-    void _updateLed(uint8_t state);
+    void _updateBleStatusLed();
     bool _loadFromFlash();
     bool _persistToFlash();
     bool _eraseFlash();

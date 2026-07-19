@@ -183,12 +183,14 @@ void MiniR4BLERuntimeClass::poll()
     const bool nowRunning = _vm.isRunning();
     if (nowRunning) {
         for (uint8_t i = 0; i < STEPS_PER_POLL && _vm.isRunning(); ++i) _vm.step();
-        _updateLed(2);
-    } else {
-        if (_wasRunning && _bleActive) _sendState();
-        _updateLed(_programSize > 0 ? 1 : 0);
+    } else if (_wasRunning && _bleActive) {
+        _sendState();
     }
     _wasRunning = nowRunning;
+
+    // LED2 is reserved for the BLE status indicator so LED1 stays fully
+    // controllable by user code / VM bytecode. Colour choices below.
+    _updateBleStatusLed();
 }
 
 void MiniR4BLERuntimeClass::setSketchId(uint32_t id)
@@ -257,29 +259,45 @@ void MiniR4BLERuntimeClass::_checkToggleGesture()
 
 void MiniR4BLERuntimeClass::_flashLedFeedback(bool enabling)
 {
+    // Kill-switch gesture feedback lives on LED2 (the BLE indicator LED)
+    // so it never fights with user code / VM code that owns LED1.
     const uint8_t r = enabling ? 0   : 60;
     const uint8_t g = enabling ? 60  : 0;
     const uint8_t b = 0;
     for (uint8_t i = 0; i < 3; ++i) {
-        MiniR4.LED.setColor(1, r, g, b);
+        MiniR4.LED.setColor(2, r, g, b);
         delay(120);
-        MiniR4.LED.setColor(1, 0, 0, 0);
+        MiniR4.LED.setColor(2, 0, 0, 0);
         delay(120);
     }
     _currentLedState = 0xFF;  // force re-apply on next poll()
 }
 
-// --- LED indicator ----------------------------------------------------------
-// 0=red (no program), 1=blue (loaded/idle), 2=green (running).
+// --- BLE status LED (LED2) --------------------------------------------------
+// 0 = off (BLE disabled by kill switch or begin() not called).
+// 1 = dim green (BLE up, advertising, no central).
+// 2 = cyan (a central is connected -- IDE, nRF Connect, etc).
 
-void MiniR4BLERuntimeClass::_updateLed(uint8_t state)
+void MiniR4BLERuntimeClass::_updateBleStatusLed()
 {
+    // ArduinoBLE's BLE.central() returns a BLEDevice object that stays
+    // "truthy" (operator bool = valid handle) even after the central has
+    // dropped the link. Only .connected() reflects the live GATT state --
+    // otherwise a failed handshake latches LED2 to cyan forever.
+    uint8_t state;
+    if (!_bleActive) {
+        state = 0;
+    } else {
+        BLEDevice c = BLE.central();
+        state = (c && c.connected()) ? 2 : 1;
+    }
+
     if (state == _currentLedState) return;
     _currentLedState = state;
     switch (state) {
-        case 0: MiniR4.LED.setColor(1, 60,  0,  0); break;
-        case 1: MiniR4.LED.setColor(1,  0,  0, 60); break;
-        case 2: MiniR4.LED.setColor(1,  0, 60,  0); break;
+        case 0: MiniR4.LED.setColor(2,  0,  0,  0); break;
+        case 1: MiniR4.LED.setColor(2,  0, 30,  0); break;
+        case 2: MiniR4.LED.setColor(2,  0, 40, 40); break;
     }
 }
 
