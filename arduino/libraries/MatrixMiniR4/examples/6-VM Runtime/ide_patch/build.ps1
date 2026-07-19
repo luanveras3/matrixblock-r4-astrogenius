@@ -111,10 +111,17 @@ $jsInject = @'
 
     // BEGIN BLE runtime chooser (ide_patch/build.ps1)
     this.win.webContents.on('select-bluetooth-device', (event, deviceList, callback) => {
-      event.preventDefault();
-      const target = deviceList.find(d => d.deviceName === 'MATRIX-R4-Runtime');
-      if (target) { callback(target.deviceId); }
-      // else keep scanning until Chromium's own ~15s timeout ends the request
+      // Only auto-select when there is exactly one MATRIX-* hub in range.
+      // 0 hubs -> keep scanning (Chromium times out on its own).
+      // 2+ hubs -> do NOT preventDefault, so Electron shows its native picker
+      //           with the (already-namePrefix-filtered) hub list and the
+      //           user picks which one they want. This is the recovery path
+      //           for a classroom with several MATRIX-* devices in the air.
+      const matches = deviceList.filter(d => (d.deviceName || '').startsWith('MATRIX-'));
+      if (matches.length === 1) {
+        event.preventDefault();
+        callback(matches[0].deviceId);
+      }
     });
     // END BLE runtime chooser
 
@@ -125,24 +132,38 @@ $jsBytes = [System.IO.File]::ReadAllBytes($MainJs)
 # $mainJs -- it would clobber $MainJs (the file path). Use $mainJsSrc instead.
 $mainJsSrc = [System.Text.Encoding]::UTF8.GetString($jsBytes)
 
+# If the marker is already present, strip everything between BEGIN and END
+# (inclusive) and reinsert -- this lets us update the injected block by
+# editing $jsInject above without leaving stale copies behind.
 if ($mainJsSrc.Contains($jsMarker)) {
-    Write-Host 'main.js already patched; skipping JS edit.'
-} else {
-    # Inject just after the "createMainWindow" body's `this.win.on('closed', ...)`
-    # block. We look for the DevTools comment which sits right before the
-    # closing brace of createMainWindow.
-    $needle = "// this.win.webContents.openDevTools"
-    $idx = $mainJsSrc.IndexOf($needle)
-    if ($idx -lt 0) {
-        throw 'Could not find DevTools anchor in main.js.'
-    }
-    $eol = $mainJsSrc.IndexOf("`n", $idx)
-    if ($eol -lt 0) { throw 'Malformed main.js anchor.' }
-    $patched = $mainJsSrc.Substring(0, $eol + 1) + $jsInject + $mainJsSrc.Substring($eol + 1)
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllBytes($MainJs, $utf8NoBom.GetBytes($patched))
-    Write-Host 'Injected select-bluetooth-device handler into main.js.'
+    $beginIdx = $mainJsSrc.IndexOf($jsMarker)
+    $endIdx   = $mainJsSrc.IndexOf($jsEnd, $beginIdx)
+    if ($endIdx -lt 0) { throw 'main.js has BEGIN marker but no END marker.' }
+    $endLineEnd = $mainJsSrc.IndexOf("`n", $endIdx)
+    if ($endLineEnd -lt 0) { $endLineEnd = $mainJsSrc.Length - 1 }
+    # Include leading whitespace on the BEGIN line so we don't leave an
+    # orphan indent.
+    $lineStart = $mainJsSrc.LastIndexOf("`n", $beginIdx)
+    if ($lineStart -lt 0) { $lineStart = -1 }
+    $mainJsSrc = $mainJsSrc.Substring(0, $lineStart + 1) +
+                 $mainJsSrc.Substring($endLineEnd + 1)
+    Write-Host 'main.js: existing chooser block removed for replacement.'
 }
+
+# Inject just after the "createMainWindow" body's `this.win.on('closed', ...)`
+# block. We look for the DevTools comment which sits right before the
+# closing brace of createMainWindow.
+$needle = "// this.win.webContents.openDevTools"
+$idx = $mainJsSrc.IndexOf($needle)
+if ($idx -lt 0) {
+    throw 'Could not find DevTools anchor in main.js.'
+}
+$eol = $mainJsSrc.IndexOf("`n", $idx)
+if ($eol -lt 0) { throw 'Malformed main.js anchor.' }
+$patched = $mainJsSrc.Substring(0, $eol + 1) + $jsInject + $mainJsSrc.Substring($eol + 1)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllBytes($MainJs, $utf8NoBom.GetBytes($patched))
+Write-Host 'Injected select-bluetooth-device handler into main.js.'
 
 # ---- 5. Repack -------------------------------------------------------------
 if (Test-Path $Target) {

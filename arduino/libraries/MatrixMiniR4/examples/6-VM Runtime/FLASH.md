@@ -53,13 +53,37 @@ this git checkout, sync your changes to the toolchain tree first:
 
 ## Verifying the flash worked
 
-1. `MATRIX-R4-Runtime` shows up in **nRF Connect** on your phone within
-   ~1 second of reset. The Windows Bluetooth settings panel will NOT show
-   this device — see `project_ble_scanner_gotcha` in memory.
-2. Open the MATRIXblock IDE, click **Conectar via BLE**, then **Enviar via
-   BLE** on any workspace. LED1 pulses while the VM runs.
-3. To go back to native mode, send `CMD_ERASE` (0x06) over BLE or flash any
-   other USB sketch — the runtime is re-embedded by the IDE wrapper.
+1. A hub named `MATRIX-*` shows up in **nRF Connect** on your phone within
+   ~1 second of reset. A brand-new R4 advertises `MATRIX-R4-Runtime`; any
+   name saved through the IDE modal (see below) shows up instead.
+   The Windows Bluetooth settings panel will NOT show this device — see
+   `project_ble_scanner_gotcha` in memory.
+2. **LED2** goes dim green when the stack is up and no client is connected,
+   cyan when a central connects. If LED2 stays off after reset, either the
+   kill-switch flag is disabled (hold BTN_UP + BTN_DOWN 3 s to toggle) or
+   the ArduinoBLE stack failed to come up.
+3. **LED1** is untouched by the runtime — user code / VM opcodes own it.
+4. Open the MATRIXblock IDE, click **Conectar** to open the modal, hit
+   **Buscar**, then **Enviar via BLE** on any workspace.
+5. To go back to native mode, USB-reflash from the IDE (each build gets a
+   fresh `MINIR4_SKETCH_ID` so the runtime wipes the stored bytecode on
+   boot), or send `CMD_ERASE` (0x06) over BLE.
+
+## Renaming a hub
+
+The IDE modal has a "Renomear este hub" section that appears once you're
+connected. Type any suffix; the IDE prepends `MATRIX-` automatically and
+sends `CMD_SET_NAME` (0x08). The runtime persists the new name to
+dataflash block 6 and rejects any payload that doesn't start with
+`MATRIX-` (hard guarantee — a rogue nRF Connect write can't rename the
+hub to something undiscoverable). Names are printable ASCII, max 24
+characters. The change takes effect after the R4 restarts because
+ArduinoBLE doesn't support flipping the advertised local name mid-run.
+
+Discovery still works after a rename: leaving the modal's Hub Name field
+at `MATRIX-` triggers a `namePrefix: "MATRIX-"` scan, which surfaces
+every hub in range in Electron's native picker so a forgotten name is
+recoverable.
 
 ## When it breaks
 

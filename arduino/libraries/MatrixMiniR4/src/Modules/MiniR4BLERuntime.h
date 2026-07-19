@@ -31,7 +31,12 @@
  *                    offset 1..3  : padding (kept 0xFF).
  *                    offset 4..7  : last-known sketch ID (uint32 LE);
  *                                   0xFFFFFFFF = never set.
- *   Block 6..7  -- free.
+ *   Block 6     -- custom BLE local name:
+ *                    offset 0..3  : magic 'M','B','R','N' if set.
+ *                    offset 4     : length (1..MAX_DEVICE_NAME).
+ *                    offset 5..N  : printable ASCII bytes (no null terminator).
+ *                  Unset (magic missing) means advertise as MATRIX-R4-Runtime.
+ *   Block 7     -- free.
  */
 #ifndef MINIR4_BLE_RUNTIME_H
 #define MINIR4_BLE_RUNTIME_H
@@ -86,6 +91,18 @@ public:
     void delay(uint32_t ms);
 
     /**
+     * @brief Persist a custom BLE local name (max 24 printable ASCII chars).
+     *
+     * Overwrites dataflash block 6. Empty or invalid names are rejected.
+     * The change takes effect on next reboot -- ArduinoBLE does not support
+     * flipping the advertised local name mid-run.
+     *
+     * Returns true on success. The BLE CMD_SET_NAME (0x08) command exposes
+     * this over the wire so the IDE can rename a hub from the classroom.
+     */
+    bool setDeviceName(const char* name);
+
+    /**
      * @brief Tag the running sketch with a unique per-build ID.
      *
      * Must be called BEFORE begin(). The IDE wrapper injects one call per
@@ -137,6 +154,8 @@ private:
     void _writeEnableFlag(bool enabled);
     uint32_t _readStoredSketchId();
     void _writeBlock5(bool enabled, uint32_t sketchId);
+    bool _readDeviceName(char* out, size_t maxLen);
+    bool _writeDeviceName(const char* name);
 
     MiniR4VM _vm;
     uint16_t _programSize;

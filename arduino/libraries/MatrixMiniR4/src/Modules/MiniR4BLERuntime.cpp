@@ -31,13 +31,19 @@ constexpr uint32_t DATAFLASH_BASE  = 1024;                      // start of bloc
 constexpr uint32_t ENABLE_FLAG_ADDR = DATAFLASH_BASE + 4 * DATAFLASH_BLOCK; // block 5
 constexpr uint32_t SKETCH_ID_ADDR   = ENABLE_FLAG_ADDR + 4;                 // block 5 offset 4
 constexpr uint32_t SKETCH_ID_UNSET  = 0xFFFFFFFFu;
+constexpr uint32_t DEVICE_NAME_ADDR = DATAFLASH_BASE + 5 * DATAFLASH_BLOCK; // block 6
+constexpr uint8_t  DEVICE_NAME_MAGIC[4] = {'M', 'B', 'R', 'N'};
+constexpr uint8_t  MAX_DEVICE_NAME  = 24;                                   // fits under 31-byte ADV budget
+constexpr uint8_t  NAME_HEADER_SIZE = 5;                                    // 4 magic + 1 length
+constexpr const char* DEFAULT_NAME  = "MATRIX-R4-Runtime";
 constexpr uint8_t  MAGIC[4]        = {'M', 'B', 'R', '4'};
 constexpr uint8_t  STEPS_PER_POLL  = 32;
 constexpr uint32_t TOGGLE_HOLD_MS  = 3000;
 
 enum : uint8_t {
-    CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END = 0x03,
-    CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06, CMD_INFO = 0x07,
+    CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END   = 0x03,
+    CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06,
+    CMD_INFO  = 0x07, CMD_SET_NAME = 0x08,
     RSP_ACK   = 0xA0, RSP_STATE = 0xA1,
 };
 
@@ -162,16 +168,23 @@ void MiniR4BLERuntimeClass::begin()
     // 128-bit service UUID goes in the scan response. Together they'd exceed
     // the 31-byte ADV limit and the name would be truncated or dropped, which
     // is exactly what a central scanner sees as "device not visible".
+    // Local name is read from dataflash block 6; falls back to
+    // MATRIX-R4-Runtime if nobody ever called setDeviceName().
+    static char nameBuf[MAX_DEVICE_NAME + 1];
+    if (!_readDeviceName(nameBuf, sizeof(nameBuf))) {
+        strncpy(nameBuf, DEFAULT_NAME, sizeof(nameBuf) - 1);
+        nameBuf[sizeof(nameBuf) - 1] = '\0';
+    }
     static BLEAdvertisingData advData;
     static BLEAdvertisingData scanResp;
-    advData.setLocalName("MATRIX-R4-Runtime");
+    advData.setLocalName(nameBuf);
     scanResp.setAdvertisedService(g_uartService);
     BLE.setAdvertisingData(advData);
     BLE.setScanResponseData(scanResp);
 
     BLE.advertise();
     _bleActive = true;
-    BLERT_TRACE("advertise() called -- MATRIX-R4-Runtime should be visible");
+    BLERT_TRACE("advertise() called");
 }
 
 void MiniR4BLERuntimeClass::poll()
@@ -196,6 +209,11 @@ void MiniR4BLERuntimeClass::poll()
 void MiniR4BLERuntimeClass::setSketchId(uint32_t id)
 {
     _pendingSketchId = id;
+}
+
+bool MiniR4BLERuntimeClass::setDeviceName(const char* name)
+{
+    return _writeDeviceName(name);
 }
 
 void MiniR4BLERuntimeClass::delay(uint32_t ms)
@@ -402,6 +420,69 @@ void MiniR4BLERuntimeClass::_writeBlock5(bool enabled, uint32_t sketchId)
     (void)g_flash.program(buf, ENABLE_FLAG_ADDR, sizeof(buf));
 }
 
+// --- Device name storage (block 6) ------------------------------------------
+// A brand-new R4 has no name stored -- the runtime advertises MATRIX-R4-Runtime
+// by default so the IDE finds it out of the box. Renaming persists here so a
+// classroom can have MATRIX-3A-01, MATRIX-3A-02, ... all responding on the
+// same NUS protocol. Names are printable ASCII (0x20..0x7E) up to 24 bytes.
+
+bool MiniR4BLERuntimeClass::_readDeviceName(char* out, size_t maxLen)
+{
+    if (!out || maxLen < 2) return false;
+    alignas(4) uint8_t buf[NAME_HEADER_SIZE + MAX_DEVICE_NAME];
+    if (g_flash.read(buf, DEVICE_NAME_ADDR, sizeof(buf)) != 0) return false;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (buf[i] != DEVICE_NAME_MAGIC[i]) return false;
+    }
+    const uint8_t len = buf[4];
+    if (len == 0 || len > MAX_DEVICE_NAME || len >= maxLen) return false;
+    for (uint8_t i = 0; i < len; ++i) {
+        const uint8_t c = buf[NAME_HEADER_SIZE + i];
+        if (c < 0x20 || c > 0x7E) return false;
+    }
+    memcpy(out, buf + NAME_HEADER_SIZE, len);
+    out[len] = '\0';
+    return true;
+}
+
+bool MiniR4BLERuntimeClass::_writeDeviceName(const char* name)
+{
+    if (!name) return false;
+
+    // Non-negotiable rule: the local name MUST start with "MATRIX-" so any
+    // client can rediscover a forgotten hub via a namePrefix scan. Reject
+    // any other prefix here even if the caller is a raw BLE tool that
+    // bypassed the IDE's own validation.
+    static const char PREFIX[] = "MATRIX-";
+    for (uint8_t i = 0; i < sizeof(PREFIX) - 1; ++i) {
+        if (name[i] != PREFIX[i]) return false;
+    }
+
+    uint8_t len = 0;
+    while (name[len] != '\0' && len < MAX_DEVICE_NAME) {
+        const uint8_t c = (uint8_t)name[len];
+        if (c < 0x20 || c > 0x7E) return false;
+        len++;
+    }
+    if (len == 0) return false;
+    // Reject if the caller passed a longer string than we can persist.
+    if (name[len] != '\0') return false;
+    // Also reject if the payload is nothing but the prefix -- "MATRIX-" alone
+    // isn't a useful hub name and would defeat the search-all UX.
+    if (len == sizeof(PREFIX) - 1) return false;
+
+    if (g_flash.erase(DEVICE_NAME_ADDR, DATAFLASH_BLOCK) != 0) return false;
+
+    // Program header + name padded to a 4-byte boundary.
+    alignas(4) uint8_t buf[NAME_HEADER_SIZE + MAX_DEVICE_NAME + 3];
+    memset(buf, 0xFF, sizeof(buf));
+    memcpy(buf, DEVICE_NAME_MAGIC, 4);
+    buf[4] = len;
+    memcpy(buf + NAME_HEADER_SIZE, name, len);
+    const uint32_t writeSize = ((uint32_t)NAME_HEADER_SIZE + len + 3u) & ~3u;
+    return (g_flash.program(buf, DEVICE_NAME_ADDR, writeSize) == 0);
+}
+
 // --- BLE responses ----------------------------------------------------------
 
 void MiniR4BLERuntimeClass::_sendAck(uint8_t cmd, uint8_t status)
@@ -486,6 +567,21 @@ void MiniR4BLERuntimeClass::_onRxWriteImpl(const uint8_t* data, int len)
             _sendAck(cmd, 0);
             _sendState();
             break;
+
+        case CMD_SET_NAME: {
+            // Payload = raw ASCII name bytes (no null terminator). Empty
+            // or too-long payloads fail; the write helper validates the
+            // character set (printable ASCII 0x20..0x7E) and rejects on
+            // any bad byte, so we don't need to double-check here.
+            if (len < 2) { _sendAck(cmd, 1); return; }
+            const uint16_t nameLen = (uint16_t)(len - 1);
+            if (nameLen > MAX_DEVICE_NAME) { _sendAck(cmd, 2); return; }
+            char name[MAX_DEVICE_NAME + 1];
+            memcpy(name, data + 1, nameLen);
+            name[nameLen] = '\0';
+            _sendAck(cmd, _writeDeviceName(name) ? 0 : 3);
+            break;
+        }
 
         default:
             _sendAck(cmd, 0xFF);

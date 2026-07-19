@@ -27,8 +27,8 @@
             connectFail:    'Could not connect: %s',
             notConnected:   'Not connected. Click "Connect" first.',
             modalTitle:     'BLE connection',
-            modalHubName:   'Hub name',
-            modalHubHint:   'The Bluetooth name your R4 advertises. Default is MATRIX-R4-Runtime.',
+            modalHubName:   'Hub name (optional)',
+            modalHubHint:   'Leave "MATRIX-" alone to list every hub in range, or type the exact name to jump straight to it.',
             modalSearch:    'Search',
             modalCancel:    'Cancel',
             modalClose:     'Close',
@@ -36,6 +36,14 @@
             modalStatusBusy:'Working...',
             modalStatusConn:'Connected to %s',
             cancelled:      'Cancelled by user.',
+            modalRename:    'Rename this hub',
+            modalRenameHint:'Up to 24 printable ASCII characters. Takes effect after the R4 restarts.',
+            modalRenameSave:'Save',
+            renameEmpty:    'Name is empty.',
+            renameTooLong:  'Name too long (max %d).',
+            renameBadChar:  'Only printable ASCII is allowed.',
+            renameOk:       'Name saved. Restart the R4 for it to take effect.',
+            renameFail:     'Rename failed (status %d).',
             btnLabel:       'Send via BLE',
             btnTitle:       'Compile blocks to bytecode and send to the R4 over BLE',
             unsupported:    'Web Bluetooth is not available in this environment.',
@@ -67,8 +75,8 @@
             connectFail:    'Nao foi possivel conectar: %s',
             notConnected:   'Sem conexao. Clique em "Conectar" primeiro.',
             modalTitle:     'Conexao BLE',
-            modalHubName:   'Nome do hub',
-            modalHubHint:   'Nome Bluetooth que o R4 anuncia. Padrao: MATRIX-R4-Runtime.',
+            modalHubName:   'Nome do hub (opcional)',
+            modalHubHint:   'Deixe "MATRIX-" para listar todos os hubs no ar, ou digite o nome exato para conectar direto.',
             modalSearch:    'Buscar',
             modalCancel:    'Cancelar',
             modalClose:     'Fechar',
@@ -76,6 +84,14 @@
             modalStatusBusy:'Trabalhando...',
             modalStatusConn:'Conectado a %s',
             cancelled:      'Cancelado pelo usuario.',
+            modalRename:    'Renomear este hub',
+            modalRenameHint:'Ate 24 caracteres ASCII imprimiveis. Aplica apos reiniciar o R4.',
+            modalRenameSave:'Salvar',
+            renameEmpty:    'Nome vazio.',
+            renameTooLong:  'Nome muito longo (max %d).',
+            renameBadChar:  'Somente ASCII imprimivel e permitido.',
+            renameOk:       'Nome salvo. Reinicie o R4 para aplicar.',
+            renameFail:     'Falha ao renomear (status %d).',
             btnLabel:       'Enviar via BLE',
             btnTitle:       'Compila os blocos para bytecode e envia para o R4 por BLE',
             unsupported:    'Web Bluetooth nao esta disponivel neste ambiente.',
@@ -116,7 +132,14 @@
     const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
     const NUS_TX      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
     const DEFAULT_DEVICE_NAME = 'MATRIX-R4-Runtime';
+    const REQUIRED_PREFIX     = 'MATRIX-';
     const DEVICE_NAME_KEY = 'ble.deviceName';
+    function normalizeHubName(raw) {
+        const clean = (raw || '').trim();
+        if (!clean) return REQUIRED_PREFIX;
+        if (clean.toUpperCase().startsWith(REQUIRED_PREFIX)) return clean;
+        return REQUIRED_PREFIX + clean;
+    }
     function getDeviceName() {
         try {
             const stored = window.localStorage.getItem(DEVICE_NAME_KEY);
@@ -136,11 +159,13 @@
     }
 
     const CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END = 0x03;
-    const CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06, CMD_INFO = 0x07;
+    const CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06;
+    const CMD_INFO  = 0x07, CMD_SET_NAME = 0x08;
     const RSP_ACK   = 0xA0, RSP_STATE = 0xA1;
 
     const CHUNK_SIZE = 60;
     const ACK_TIMEOUT_MS = 3000;
+    const MAX_HUB_NAME = 24;
 
     // --- Logging: browser console + code-Div panel + floating overlay -------
     let overlayEl = null;
@@ -410,9 +435,19 @@
         updateModal();
         const deviceName = getDeviceName();
         try {
-            log(fmt(tr('connecting'), deviceName));
+            // If the caller has a concrete name in mind (anything past
+            // "MATRIX-"), filter for exact match -- fast path, main.js
+            // auto-select fires immediately. Otherwise fall back to a
+            // namePrefix scan so the native picker can enumerate every
+            // MATRIX-* hub in the room; that's the recovery path when the
+            // user forgot the exact hub name after renaming.
+            const wantsSpecific = deviceName.length > REQUIRED_PREFIX.length;
+            const filters = wantsSpecific
+                ? [{ name: deviceName }]
+                : [{ namePrefix: REQUIRED_PREFIX }];
+            log(fmt(tr('connecting'), wantsSpecific ? deviceName : REQUIRED_PREFIX + '*'));
             state.device = await raceCancel(navigator.bluetooth.requestDevice({
-                filters: [{ name: deviceName }],
+                filters: filters,
                 optionalServices: [NUS_SERVICE],
             }));
             state.device.addEventListener('gattserverdisconnected', () => {
@@ -661,6 +696,14 @@
                 '<div id="bleModalNameHint" style="font-size:12px;color:#666;margin-top:4px;"></div>' +
               '</div>' +
               '<div id="bleModalStatus" style="margin:12px 0;padding:8px 10px;background:#f4f4f5;border-radius:4px;font-family:monospace;font-size:12px;color:#333;"></div>' +
+              '<div id="bleModalRenameBox" style="display:none;margin:12px 0;padding:10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;">' +
+                '<label id="bleModalRenameLabel" for="bleModalRename" style="display:block;font-weight:600;margin-bottom:4px;font-size:13px;">Rename this hub</label>' +
+                '<div style="display:flex;gap:6px;">' +
+                  '<input id="bleModalRename" type="text" maxlength="24" style="flex:1;padding:6px 8px;border:1px solid #bfdbfe;border-radius:4px;font:inherit;" />' +
+                  '<button id="bleModalRenameSave" type="button" style="padding:6px 12px;border:0;background:#059669;color:#fff;border-radius:4px;cursor:pointer;">Save</button>' +
+                '</div>' +
+                '<div id="bleModalRenameHint" style="font-size:11px;color:#3b82f6;margin-top:4px;"></div>' +
+              '</div>' +
               '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">' +
                 '<button id="bleModalCancel" type="button" style="padding:6px 14px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:4px;cursor:pointer;">Cancel</button>' +
                 '<button id="bleModalDisconnect" type="button" style="padding:6px 14px;border:1px solid #64748b;background:#fff;color:#64748b;border-radius:4px;cursor:pointer;">Disconnect</button>' +
@@ -683,7 +726,47 @@
         document.getElementById('bleModalDisconnect').addEventListener('click', () => {
             disconnect();
         });
+        document.getElementById('bleModalRenameSave').addEventListener('click', () => {
+            const name = document.getElementById('bleModalRename').value;
+            renameHub(name);
+        });
         return modalEl;
+    }
+
+    // Push a new BLE local name to the connected R4 via CMD_SET_NAME. Client-
+    // side we also update the stored filter so the next Search picks the
+    // renamed hub without the user having to retype it. The rename takes
+    // effect on the R4 after a reboot -- ArduinoBLE can't flip the
+    // advertised local name mid-run.
+    async function renameHub(rawName) {
+        const name = normalizeHubName(rawName);
+        // normalizeHubName always returns at least "MATRIX-"; require some
+        // suffix so we're not asking the R4 to persist the bare prefix.
+        if (name === REQUIRED_PREFIX) { log(tr('renameEmpty'), 'error'); return; }
+        if (name.length > MAX_HUB_NAME) {
+            log(fmt(tr('renameTooLong'), MAX_HUB_NAME), 'error');
+            return;
+        }
+        for (let i = 0; i < name.length; i++) {
+            const c = name.charCodeAt(i);
+            if (c < 0x20 || c > 0x7E) { log(tr('renameBadChar'), 'error'); return; }
+        }
+        if (!state.session) { log(tr('notConnected'), 'error'); return; }
+        try {
+            const bytes = new Uint8Array(name.length);
+            for (let i = 0; i < name.length; i++) bytes[i] = name.charCodeAt(i);
+            const ack = await state.session.send(CMD_SET_NAME, bytes);
+            if (ack.status !== 0) {
+                log(fmt(tr('renameFail'), ack.status), 'error');
+                return;
+            }
+            setDeviceName(name);
+            log(tr('renameOk'), 'ok');
+            updateModal();
+        } catch (e) {
+            if (e instanceof CancelledError) { log(tr('cancelled')); return; }
+            log('Rename error: ' + ((e && e.message) || e), 'error');
+        }
     }
 
     function openModal() {
@@ -696,6 +779,10 @@
         document.getElementById('bleModalDisconnect').textContent = tr('disconnect');
         document.getElementById('bleModalClose').title = tr('modalClose');
         document.getElementById('bleModalName').value = getDeviceName();
+        document.getElementById('bleModalRenameLabel').textContent = tr('modalRename');
+        document.getElementById('bleModalRenameHint').textContent = tr('modalRenameHint');
+        document.getElementById('bleModalRenameSave').textContent = tr('modalRenameSave');
+        document.getElementById('bleModalRename').value = getDeviceName();
         m.style.display = 'flex';
         updateModal();
     }
@@ -711,10 +798,12 @@
         const cancelBtn = document.getElementById('bleModalCancel');
         const disc      = document.getElementById('bleModalDisconnect');
         const status    = document.getElementById('bleModalStatus');
+        const renameBox = document.getElementById('bleModalRenameBox');
         if (nameField)  nameField.disabled = busy || connected;
         if (search)     search.disabled    = busy || connected;
         if (cancelBtn)  cancelBtn.style.display = busy ? '' : 'none';
         if (disc)       disc.style.display     = (connected && !busy) ? '' : 'none';
+        if (renameBox)  renameBox.style.display = (connected && !busy) ? '' : 'none';
         if (status) {
             if (busy)       status.textContent = tr('modalStatusBusy');
             else if (connected) status.textContent = fmt(tr('modalStatusConn'), getDeviceName());
