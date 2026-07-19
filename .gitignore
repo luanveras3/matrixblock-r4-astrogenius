@@ -62,3 +62,6 @@ arduino/blocks_examples/zh-tw/
 !arduino/libraries/MatrixMiniR4/examples/
 !arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/
 !arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/**
+
+# arduino-cli build output produced by flash.ps1 -- do not commit
+arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/.build/

@@ -1,0 +1,91 @@
+# Flashing the always-on BLE runtime to the R4
+
+TL;DR — one command from this folder:
+
+```powershell
+cd "arduino\libraries\MatrixMiniR4\examples\6-VM Runtime"
+.\flash.ps1
+```
+
+Auto-detects the R4 WiFi port, compiles `MiniR4_BLE_Runtime.ino`, and uploads.
+Expected result: `Sketch uses 134332 bytes (51%) of program storage space` and
+the R4 starts advertising `MATRIX-R4-Runtime` over BLE.
+
+## Why there are two `arduino/` trees
+
+Flashing the runtime requires a full Arduino toolchain **plus** the complete
+`MatrixMiniR4`, `ArduinoBLE`, `PubSubClient`, `HUSKYLENS` libraries. This repo
+only carries the delta on top of upstream `MatrixMiniR4` (the
+`src/Modules/MiniR4BLERuntime.{h,cpp}` files and the runtime sketch), so it is
+**not buildable on its own**.
+
+The full self-contained build environment lives at:
+
+    C:\matrixblock-r4\arduino\
+    ├── arduino-cli.exe              # bundled CLI (matches the MATRIXblock IDE version)
+    ├── arduino-cli.yaml             # points data/user dirs at ./ so libraries below win
+    ├── libraries\
+    │   ├── ArduinoBLE\
+    │   ├── HUSKYLENS\
+    │   ├── MatrixMiniR4\            # full 1.2.2 library + our BLE runtime delta
+    │   └── PubSubClient\
+    └── packages\arduino\hardware\renesas_uno\1.5.1\   # the Renesas core
+
+`flash.ps1` targets that tree directly. It does **not** use the user's
+`~\Documents\Arduino\libraries\` or `~\OneDrive\Documentos\Arduino\libraries\`
+sketchbook. If you edit `MiniR4BLERuntime.{h,cpp}` or the runtime `.ino` in
+this git checkout, sync your changes to the toolchain tree first:
+
+```powershell
+.\flash.ps1 -Sync           # copy runtime + sketch from repo -> toolchain, then build + upload
+.\flash.ps1 -Sync -CompileOnly   # sync + build only, no upload
+```
+
+## Common flags
+
+| flag              | what it does                                                            |
+|-------------------|-------------------------------------------------------------------------|
+| `-CompileOnly`    | Dry run — compile, skip upload. Use to verify a change.                 |
+| `-Port COM10`     | Force a specific port instead of auto-detecting.                        |
+| `-Sync`           | Copy runtime + sketch from this git checkout into the toolchain tree.   |
+| `-ToolchainRoot`  | Override `C:\matrixblock-r4\arduino` if you keep it elsewhere.          |
+| `-Fqbn`           | Override the board FQBN (default `arduino:renesas_uno:unor4wifi`).      |
+
+## Verifying the flash worked
+
+1. `MATRIX-R4-Runtime` shows up in **nRF Connect** on your phone within
+   ~1 second of reset. The Windows Bluetooth settings panel will NOT show
+   this device — see `project_ble_scanner_gotcha` in memory.
+2. Open the MATRIXblock IDE, click **Conectar via BLE**, then **Enviar via
+   BLE** on any workspace. LED1 pulses while the VM runs.
+3. To go back to native mode, send `CMD_ERASE` (0x06) over BLE or flash any
+   other USB sketch — the runtime is re-embedded by the IDE wrapper.
+
+## When it breaks
+
+Almost every failure I've seen falls into one of these:
+
+- **`fatal error: Modules/MiniR4BLERuntime.h: No such file`** — arduino-cli
+  picked up a stale `MatrixMiniR4` from your Documents/OneDrive sketchbook
+  instead of the toolchain copy. Check that the toolchain has the runtime
+  files (`ls C:\matrixblock-r4\arduino\libraries\MatrixMiniR4\src\Modules\`)
+  and that `flash.ps1` printed `arduino-cli: C:\matrixblock-r4\arduino\...`.
+- **`No R4 WiFi detected`** — cable is data-only or the R4 is in bootloader
+  mode. Double-tap the reset button to exit bootloader, or pass `-Port COMx`
+  explicitly.
+- **Upload hangs at 0%** — port is held open by another process (Arduino
+  IDE Serial Monitor, a Python script). Close it and retry.
+- **BLE stack up but nothing advertises** — RF power gate. Give the R4 a
+  proper 5V USB supply, not a low-power hub. This was the 2026-07-18 debug
+  rabbit hole; see `SESSION_2026-07-18_ALWAYS_ON_BLE.md`.
+
+## The wrapper vs this standalone sketch
+
+Most flashes in normal use go through the MATRIXblock IDE, which wraps
+whatever Blockly workspace the student made into an `.ino` that calls
+`BLERuntime.begin()` and `BLERuntime.poll()` around the user code, then USB-
+uploads it. This standalone sketch is only for:
+
+- Bringing up a new R4 that has never had the runtime on it.
+- Reproducing a runtime bug without the wrapper in the mix.
+- Wiping user code so the R4 boots directly into BLE listener mode.
