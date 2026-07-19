@@ -220,6 +220,62 @@
         return raceCancel(new Promise(r => setTimeout(r, ms)));
     }
 
+    // Watchdog for silent disconnects. Two failure modes to cover:
+    //  1. gatt.disconnect() called on either side -> gattserverdisconnected
+    //     fires reliably, listener in connect() handles cleanup.
+    //  2. Peripheral vanishes without a clean LL_TERMINATE_IND (R4 hardware
+    //     reset, USB unplug, BLE stack crash). Chromium sometimes keeps
+    //     gatt.connected == true here even though the link is dead -- the
+    //     .connected flag alone can't be trusted.
+    // Countermeasure: active heartbeat. Every 3 s we send CMD_INFO; if the
+    // send fails (write error) or the ACK times out, the peripheral is gone
+    // and we tear the local session down so the modal / LED reflect reality.
+    let watchdogInterval = null;
+    let heartbeatInFlight = false;
+    async function heartbeatTick() {
+        if (heartbeatInFlight) { log('[hb] previous tick still in flight, skipping'); return; }
+        if (!state.session)    { log('[hb] no session'); return; }
+        if (state.uploading)   { log('[hb] user upload in progress, skipping'); return; }
+        heartbeatInFlight = true;
+        const t0 = performance.now();
+        log('[hb] ping');
+        try {
+            await state.session.send(CMD_INFO);
+            log('[hb] pong in ' + Math.round(performance.now() - t0) + ' ms', 'ok');
+        } catch (e) {
+            log('BLE link dropped (heartbeat: ' +
+                ((e && e.message) || e) + ').', 'error');
+            stopWatchdog();
+            disconnect();
+        } finally {
+            heartbeatInFlight = false;
+        }
+    }
+    function startWatchdog() {
+        stopWatchdog();
+        log('[wd] watchdog armed (3 s interval)');
+        watchdogInterval = setInterval(() => {
+            if (!state.session) { stopWatchdog(); return; }
+            const gatt = state.device && state.device.gatt;
+            const connected = !!(gatt && gatt.connected);
+            log('[wd] tick, gatt.connected=' + connected);
+            if (!connected) {
+                log('BLE link dropped (watchdog: gatt.connected=false).', 'error');
+                stopWatchdog();
+                disconnect();
+                return;
+            }
+            heartbeatTick();
+        }, 3000);
+    }
+    function stopWatchdog() {
+        if (watchdogInterval) {
+            clearInterval(watchdogInterval);
+            watchdogInterval = null;
+        }
+        heartbeatInFlight = false;
+    }
+
     function cancel() {
         console.log('[BLE] cancel() invoked, connecting=' + state.connecting +
                     ' uploading=' + state.uploading);
@@ -243,7 +299,8 @@
         constructor(rxChar, txChar) {
             this.rx = rxChar;
             this.tx = txChar;
-            this._pending = null;
+            this._pending = null;   // { resolve, reject } for the in-flight send
+            this._sendChain = null; // serialises overlapping send() calls
             this._onState = null;
             this._notifyBound = ev => this._onNotify(ev);
             txChar.addEventListener('characteristicvaluechanged', this._notifyBound);
@@ -268,28 +325,55 @@
                 if (this._onState) this._onState(st);
             }
         }
+        // Public entry point. All sends are strictly serialised -- the R4
+        // protocol is one cmd at a time and two overlapping sends steal each
+        // other's ACKs (this bit us on the watchdog heartbeat colliding with
+        // a user upload). Queueing is cheap: each send finishes within its
+        // own <= 5 s bound so nothing sits in the chain for long.
         async send(cmd, payload) {
+            const prev = this._sendChain || Promise.resolve();
+            let release;
+            this._sendChain = new Promise(r => release = r);
+            try { await prev; } catch (_) { /* swallow: prior send's error is not our problem */ }
+            try {
+                return await this._sendOne(cmd, payload);
+            } finally {
+                release();
+            }
+        }
+        async _sendOne(cmd, payload) {
             payload = payload || new Uint8Array(0);
             const frame = new Uint8Array(1 + payload.length);
             frame[0] = cmd;
             frame.set(payload, 1);
-            const ackPromise = new Promise((resolve, reject) => {
-                this._pending = { resolve, reject };
-                setTimeout(() => {
-                    if (this._pending) {
-                        this._pending = null;
-                        reject(new Error('ACK timeout for cmd 0x' + cmd.toString(16)));
-                    }
-                }, ACK_TIMEOUT_MS);
-            });
-            // Race the write against a hard timeout so a hung BLE stack
-            // surfaces an error instead of an indefinite wait.
-            const writeTimeout = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(
-                    'BLE write timeout for cmd 0x' + cmd.toString(16) +
-                    ' -- is the R4 running the BLE runtime?')), 5000));
-            await Promise.race([this.rx.writeValueWithResponse(frame), writeTimeout]);
-            return ackPromise;
+
+            // Set up the ACK slot BEFORE the write so a very fast ACK can't
+            // land before the pending is registered.
+            let resolveAck, rejectAck;
+            const ackPromise = new Promise((res, rej) => { resolveAck = res; rejectAck = rej; });
+            const pending = { resolve: resolveAck, reject: rejectAck };
+            this._pending = pending;
+
+            // Timers use referential equality on `pending` so they only ever
+            // touch their own slot, never a subsequent send's slot.
+            const ackTimer = setTimeout(() => {
+                if (this._pending === pending) {
+                    this._pending = null;
+                    rejectAck(new Error('ACK timeout for cmd 0x' + cmd.toString(16)));
+                }
+            }, ACK_TIMEOUT_MS);
+
+            try {
+                const writeTimeout = new Promise((_, rej) =>
+                    setTimeout(() => rej(new Error(
+                        'BLE write timeout for cmd 0x' + cmd.toString(16) +
+                        ' -- is the R4 running the BLE runtime?')), 5000));
+                await Promise.race([this.rx.writeValueWithResponse(frame), writeTimeout]);
+                return await ackPromise;
+            } finally {
+                clearTimeout(ackTimer);
+                if (this._pending === pending) this._pending = null;
+            }
         }
         async uploadProgram(bytes) {
             const size = bytes.length;
@@ -347,6 +431,13 @@
             // resolves before the ATT link is really ready and the next
             // getPrimaryService throws "GATT Server is disconnected".
             // Retry with backoff, up to 4 attempts (~2s total).
+            // Retry loop for the Chromium/Windows Web Bluetooth quirk where
+            // gatt.connect() resolves but the next getPrimaryService throws
+            // "GATT Server is disconnected". Just retrying the discovery
+            // call rarely recovers -- Chromium's internal state stays broken
+            // until the GATT link is torn down and rebuilt. So on failure
+            // we force a disconnect and reconnect from scratch. This mirrors
+            // what a human does when they cancel + retry manually.
             let server = null;
             let service = null;
             for (let attempt = 0; attempt < 4; attempt++) {
@@ -363,7 +454,11 @@
                     if (attempt === 3) throw e;
                     log('Retry ' + (attempt + 1) + '/3: ' +
                         ((e && e.message) || e), 'info');
-                    await sleepCancelable(300 * (attempt + 1));
+                    // Tear down the GATT link so the next iteration starts
+                    // fresh. Wrap in try/catch: if we never opened it, this
+                    // is a no-op.
+                    try { state.device.gatt.disconnect(); } catch (_) {}
+                    await sleepCancelable(400 * (attempt + 1));
                 }
             }
             const rx = await raceCancel(service.getCharacteristic(NUS_RX));
@@ -396,6 +491,7 @@
                 return;
             }
             log(tr('connectedMsg'), 'ok');
+            startWatchdog();
         } catch (e) {
             if (e instanceof CancelledError) {
                 log(tr('cancelled'));
@@ -415,6 +511,7 @@
 
     async function disconnect() {
         console.log('[BLE] disconnect() invoked, session=' + !!state.session);
+        stopWatchdog();
         if (state.device && state.device.gatt && state.device.gatt.connected) {
             try { state.device.gatt.disconnect(); } catch (e) {}
         }
