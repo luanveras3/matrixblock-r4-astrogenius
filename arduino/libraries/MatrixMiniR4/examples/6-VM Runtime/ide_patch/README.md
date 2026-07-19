@@ -63,6 +63,12 @@ To revert, restore from `app.asar.pre-ble.bak` (or the older
   `math_angle` (int-only; float truncation warns the user).
 - Operators: `+ - * / % random < > == && || !`, `round`, `constrain`,
   `const_bool`.
+- Procedures (Scratch-style, void only): `procedures_definition`,
+  `procedures_call`, `argument_reporter_string_number`,
+  `argument_reporter_boolean`. String args (`argument_reporter_string_only`)
+  warn and evaluate as 0 — the VM is int32-only. Recursion is not supported
+  (arg slots are static per procedure); a self-call will overwrite the
+  caller's args.
 
 **Not yet emitted** — `operator_mathop` (sqrt/sin/...), all string operators,
 and every hardware block (GPIO, DriveDC, LED, motors, sensors...). These

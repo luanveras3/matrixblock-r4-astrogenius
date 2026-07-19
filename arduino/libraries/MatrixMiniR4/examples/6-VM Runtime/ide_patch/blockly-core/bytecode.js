@@ -70,6 +70,53 @@ Blockly.BytecodeVM.init = function (workspace) {
     this._warnings = [];
     this._scratchDepth = 0;
     this._maxScratchDepth = 0;
+    // Procedures: keyed by procCode_ (Scratch mutation string). Populated by
+    // _scanProcs() before workspaceToCode() so callers can resolve labels and
+    // arg slots regardless of block visit order.
+    this._procs = Object.create(null);
+    this._procCode = '';        // proc bodies appended after HALT
+    this._currentProc = null;   // set while emitting a definition body so
+                                // argument reporters can resolve arg -> slot
+    if (workspace && typeof workspace.getTopBlocks === 'function') {
+        this._scanProcs(workspace);
+    }
+};
+
+// Pre-pass: allocate a label + arg-slot table for every procedures_definition
+// on the workspace. Runs before workspaceToCode() so procedures_call can look
+// up its target even when the caller is emitted before the definition.
+Blockly.BytecodeVM._scanProcs = function (workspace) {
+    const tops = workspace.getTopBlocks(false) || [];
+    for (let i = 0; i < tops.length; i++) {
+        const def = tops[i];
+        if (!def || def.type !== 'procedures_definition') continue;
+        const proto = def.childBlocks_ && def.childBlocks_[0];
+        if (!proto || !proto.procCode_) continue;
+        const key = proto.procCode_;
+        if (this._procs[key]) continue;   // duplicate definition; keep first
+
+        const argNames = (proto.displayNames_ || []).slice();
+        const argTypes = [];
+        const argSlots = [];
+        for (let j = 0; j < argNames.length; j++) {
+            const child = proto.childBlocks_ && proto.childBlocks_[j];
+            const t = child && child.type || 'argument_reporter_string_number';
+            argTypes.push(t);
+            if (t === 'argument_reporter_string_only') {
+                argSlots.push(-1);   // sentinel: strings unsupported
+            } else {
+                argSlots.push(this.varSlot('proc:' + key + ':' + argNames[j]));
+            }
+        }
+        this._procs[key] = {
+            key: key,
+            label: this.newLabel('proc'),
+            argNames: argNames,
+            argTypes: argTypes,
+            argSlots: argSlots,
+            defined: false,
+        };
+    }
 };
 
 // --- Helpers ----------------------------------------------------------------
@@ -147,6 +194,9 @@ Blockly.BytecodeVM.scrub_ = function (block, code) {
 };
 
 // --- finish / compile -------------------------------------------------------
+// Layout: [ setup ] L:main; [ main ] J:main; HALT [ proc bodies ]
+// Proc bodies live after HALT so control never falls into them; they are
+// only reachable via CALL (absolute u16 patched by the assembler).
 Blockly.BytecodeVM.finish = function (code) {
     const preLoop = this._setupCode || '';
     const trimmed = (code || '').trim();
@@ -155,7 +205,8 @@ Blockly.BytecodeVM.finish = function (code) {
         const mainLabel = this.newLabel('main');
         body = 'L:' + mainLabel + '; ' + trimmed + ' J:' + mainLabel + '; ';
     }
-    return preLoop + body + this.byte(this.OPS.HALT);
+    const procs = this._procCode || '';
+    return preLoop + body + this.byte(this.OPS.HALT) + procs;
 };
 
 /**
