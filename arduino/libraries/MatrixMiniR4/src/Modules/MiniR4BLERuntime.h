@@ -71,6 +71,9 @@ public:
     /** @return current value of the persistent BLE enable flag. */
     bool isBLEEnabled() const { return _bleEnabled; }
 
+    /** @return true if BLE.begin() succeeded and advertise() was called. */
+    bool isBLEStackUp() const { return _bleActive; }
+
     /**
      * @brief Force the enable flag on or off (writes dataflash block 5).
      *

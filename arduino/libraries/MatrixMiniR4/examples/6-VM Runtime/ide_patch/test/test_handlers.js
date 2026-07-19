@@ -136,18 +136,16 @@ G.init({});
     // JMP_IF_NOT end
     // body: PUSH_I8 1 (secs) PUSH_I16 1000 MUL DELAY_MS
     // end:
-    // Expected layout:
+    // Expected layout (control_wait TIMES is milliseconds now):
     //   0: 02 01           PUSH_I8 1        (bool true)
     //   2: 52 <off_lo> <off_hi>   JMP_IF_NOT end
-    //   5: 02 01           PUSH_I8 1        (secs)
-    //   7: 03 E8 03        PUSH_I16 1000
-    //  10: 22              MUL
-    //  11: 60              DELAY_MS
-    //  12: (end)
-    // offset from 5 to 12 = 7
+    //   5: 02 01           PUSH_I8 1        (ms)
+    //   7: 60              DELAY_MS
+    //   8: (end)
+    // offset from 5 to 8 = 3
     assertEq(bytes,
-        [0x02, 0x01, 0x52, 0x07, 0x00, 0x02, 0x01, 0x03, 0xE8, 0x03, 0x22, 0x60],
-        'control_if(true) { wait 1s } -> conditional wait');
+        [0x02, 0x01, 0x52, 0x03, 0x00, 0x02, 0x01, 0x60],
+        'control_if(true) { wait 1ms } -> conditional wait');
 }
 
 // ---- Test E: control_repeat 3 { wait 1s } ----------------------------------
@@ -163,26 +161,26 @@ G.init({});
     });
     const tok = G['control_repeat'].call(rep, rep);
     const bytes = assemble(tok);
-    // Layout:
+    // Layout (control_wait TIMES is milliseconds now):
     //   0: 02 00 11 0F        i=0; STORE_VAR 15
     //   4: 10 0F 02 03 32     LOAD_VAR 15; PUSH_I8 3; LT
     //   9: 52 __ __           JMP_IF_NOT end
-    //  12: 02 01 03 E8 03 22 60   body: wait 1s (7 bytes)
-    //  19: 10 0F 02 01 20 11 0F   inc: LOAD 15; PUSH 1; ADD; STORE 15 (7 bytes)
-    //  26: 50 __ __           JMP loop
-    //  29: (end)
-    // JMP_IF_NOT: from 12 to 29 = 17
-    // JMP:        from 29 to 4  = -25 -> 0xE7 0xFF
+    //  12: 02 01 60           body: wait 1ms (3 bytes)
+    //  15: 10 0F 02 01 20 11 0F   inc: LOAD 15; PUSH 1; ADD; STORE 15 (7 bytes)
+    //  22: 50 __ __           JMP loop
+    //  25: (end)
+    // JMP_IF_NOT: from 12 to 25 = 13
+    // JMP:        from 25 to 4  = -21 -> 0xEB 0xFF
     assertEq(bytes,
         [
             0x02, 0x00, 0x11, 0x0F,
             0x10, 0x0F, 0x02, 0x03, 0x32,
-            0x52, 0x11, 0x00,
-            0x02, 0x01, 0x03, 0xE8, 0x03, 0x22, 0x60,
+            0x52, 0x0D, 0x00,
+            0x02, 0x01, 0x60,
             0x10, 0x0F, 0x02, 0x01, 0x20, 0x11, 0x0F,
-            0x50, 0xE7, 0xFF,
+            0x50, 0xEB, 0xFF,
         ],
-        'control_repeat 3 { wait 1s } -> counted loop with scratch slot 15');
+        'control_repeat 3 { wait 1ms } -> counted loop with scratch slot 15');
 }
 
 // ---- Test F: warnings surface unsupported blocks ---------------------------

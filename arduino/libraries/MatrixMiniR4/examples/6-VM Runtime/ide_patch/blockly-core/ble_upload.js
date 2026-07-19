@@ -245,11 +245,37 @@
             state.device.addEventListener('gattserverdisconnected', () => {
                 log(tr('disconnected'));
                 state.session = null;
-                state.device = null;
+                // Preserve state.device only while an active connect() call
+                // is in the retry loop -- otherwise the R4 rebooting via USB
+                // upload leaves us pinned to a stale BluetoothDevice handle
+                // and the next Connect click fails with "Connection Error".
+                if (!state.connecting) {
+                    state.device = null;
+                }
                 updateConnectButton();
             });
-            const server = await state.device.gatt.connect();
-            const service = await server.getPrimaryService(NUS_SERVICE);
+            // Chromium/Windows Web Bluetooth quirk: gatt.connect() sometimes
+            // resolves before the ATT link is really ready and the next
+            // getPrimaryService throws "GATT Server is disconnected".
+            // Retry with backoff, up to 4 attempts (~2s total).
+            let server = null;
+            let service = null;
+            for (let attempt = 0; attempt < 4; attempt++) {
+                try {
+                    if (!state.device.gatt.connected) {
+                        server = await state.device.gatt.connect();
+                    } else {
+                        server = state.device.gatt;
+                    }
+                    service = await server.getPrimaryService(NUS_SERVICE);
+                    break;
+                } catch (e) {
+                    if (attempt === 3) throw e;
+                    log('Retry ' + (attempt + 1) + '/3: ' +
+                        ((e && e.message) || e), 'info');
+                    await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+                }
+            }
             const rx = await service.getCharacteristic(NUS_RX);
             const tx = await service.getCharacteristic(NUS_TX);
             await tx.startNotifications();
@@ -385,30 +411,21 @@
             log(fmt(tr('uploadDone'), Math.round(uploadMs), bps), 'ok');
 
             log(tr('starting'));
-            const haltPromise = new Promise(resolve => {
-                state.session._onState = (s) => {
-                    if (s.running === 0) {
-                        if (s.err && s.err !== 1 /* HALTED */) {
-                            log(fmt(tr('vmError'), s.err, s.pc), 'error');
-                        } else {
-                            log(tr('halted'), 'ok');
-                        }
-                        resolve();
-                    }
-                };
-            });
+            // Kick the VM. Programs with a control_forever body never HALT,
+            // so we must NOT hold state.uploading while waiting for it. Fire
+            // the run command, then release the lock; a background listener
+            // still surfaces HALT / VM error events as they arrive.
             await state.session.run();
-            // Poll for STATE while program runs.
-            const pollHandle = setInterval(() => {
-                if (state.session) {
-                    state.session.send(CMD_INFO).catch(() => {});
+            state.session._onState = (s) => {
+                if (s.running === 0) {
+                    if (s.err && s.err !== 1 /* HALTED */) {
+                        log(fmt(tr('vmError'), s.err, s.pc), 'error');
+                    } else {
+                        log(tr('halted'), 'ok');
+                    }
+                    state.session._onState = null;
                 }
-            }, 500);
-            await Promise.race([
-                haltPromise,
-                new Promise(r => setTimeout(r, 60000)),
-            ]);
-            clearInterval(pollHandle);
+            };
         } catch (e) {
             log('Unhandled: ' + ((e && e.message) || e), 'error');
         } finally {

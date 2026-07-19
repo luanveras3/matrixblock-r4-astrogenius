@@ -13,6 +13,14 @@
 #include "DataFlashBlockDevice.h"
 #include <ArduinoBLE.h>
 
+// Optional diagnostic traces. Define MINIR4_BLE_RUNTIME_DEBUG in the sketch
+// (before including MatrixMiniR4.h) to get Serial checkpoints inside begin().
+#ifdef MINIR4_BLE_RUNTIME_DEBUG
+  #define BLERT_TRACE(x) do { Serial.print(F("[BLERT] ")); Serial.println(F(x)); } while (0)
+#else
+  #define BLERT_TRACE(x) do {} while (0)
+#endif
+
 // --- Sizing constants (must match the runtime protocol on the client side) --
 namespace {
 
@@ -81,30 +89,44 @@ bool MiniR4BLERuntimeClass::isRunningVM() const
 
 void MiniR4BLERuntimeClass::begin()
 {
-    if (_begun) return;
+    if (_begun) { BLERT_TRACE("begin() re-entry ignored"); return; }
     _begun = true;
+    BLERT_TRACE("begin() entered");
 
     _bleEnabled = _readEnableFlag();
+#ifdef MINIR4_BLE_RUNTIME_DEBUG
+    Serial.print(F("[BLERT] enable flag: "));
+    Serial.println(_bleEnabled ? F("YES") : F("NO"));
+#endif
 
     if (_loadFromFlash() && _programSize > 0) {
         _vm.loadProgram(g_programBuf, _programSize);
         _vm.halt();   // program loaded but not auto-run
+        BLERT_TRACE("loaded stored program from dataflash");
+    } else {
+        BLERT_TRACE("no stored program");
     }
 
     if (!_bleEnabled) {
-        // BLE disabled by flag. VM still runs if a program is stored, but no
-        // wireless upload is possible until the user re-enables via the
-        // button gesture. That gesture is checked in poll().
+        BLERT_TRACE("BLE disabled by flag -- not initialising BLE stack");
         return;
     }
 
+    BLERT_TRACE("calling BLE.begin()");
     if (!BLE.begin()) {
-        // BLE hardware init failed. Fall through -- the runtime will keep
-        // trying on subsequent begin() calls if the user retries.
+        BLERT_TRACE("*** BLE.begin() returned FALSE -- BLE stack init failed ***");
         return;
     }
-    BLE.setLocalName("MATRIX-R4-Runtime");
-    BLE.setAdvertisedService(g_uartService);
+    BLERT_TRACE("BLE.begin() OK, configuring service");
+
+    // Chromium's Web Bluetooth on Windows drops connections that come up with
+    // a very short interval (the ArduinoBLE default is 20 ms which the OS
+    // then negotiates down further). Ask for 30..60 ms which pairs stay in
+    // for long enough to complete service discovery. Values are in 1.25 ms
+    // units per the BLE spec.
+    BLE.setConnectionInterval(0x0018, 0x0030);   // 30 ms .. 60 ms
+    BLE.setSupervisionTimeout(0x00C8);           // 2000 ms
+
     g_uartService.addCharacteristic(g_rxChar);
     g_uartService.addCharacteristic(g_txChar);
     BLE.addService(g_uartService);
@@ -114,8 +136,21 @@ void MiniR4BLERuntimeClass::begin()
                 g_instance->_onRxWriteImpl(ch.value(), ch.valueLength());
             }
         });
+
+    // Split the advertising payload: local name goes in the ADV packet, the
+    // 128-bit service UUID goes in the scan response. Together they'd exceed
+    // the 31-byte ADV limit and the name would be truncated or dropped, which
+    // is exactly what a central scanner sees as "device not visible".
+    static BLEAdvertisingData advData;
+    static BLEAdvertisingData scanResp;
+    advData.setLocalName("MATRIX-R4-Runtime");
+    scanResp.setAdvertisedService(g_uartService);
+    BLE.setAdvertisingData(advData);
+    BLE.setScanResponseData(scanResp);
+
     BLE.advertise();
     _bleActive = true;
+    BLERT_TRACE("advertise() called -- MATRIX-R4-Runtime should be visible");
 }
 
 void MiniR4BLERuntimeClass::poll()

@@ -26,6 +26,8 @@ const BytecodeFiles = [
   "data",
   "math",
   "operators",
+  "_mini",
+  "pins",
 ];
 
 //Loading Blocks

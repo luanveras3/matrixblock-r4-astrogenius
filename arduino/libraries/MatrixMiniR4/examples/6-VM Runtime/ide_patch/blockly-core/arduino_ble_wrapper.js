@@ -30,9 +30,45 @@ goog.require('Blockly.Arduino');
 
     Blockly.Arduino.finish = function (code) {
         const raw = Blockly.Arduino.__originalFinish.call(this, code);
-        if (raw && raw.indexOf('MiniR4BLERuntime') >= 0) return raw;
-        return wrapWithBLERuntime(raw);
+        console.log('[BLE wrapper] finish() invoked, raw ' +
+                    (raw ? raw.length : 0) + ' chars');
+        if (raw && raw.indexOf('MiniR4BLERuntime') >= 0) {
+            console.log('[BLE wrapper] already wrapped, pass through');
+            return raw;
+        }
+        const wrapped = wrapWithBLERuntime(raw);
+        console.log('[BLE wrapper] wrap applied, output ' +
+                    (wrapped ? wrapped.length : 0) + ' chars, contains runtime include=' +
+                    (wrapped && wrapped.indexOf('MiniR4BLERuntime.h') >= 0));
+        return wrapped;
     };
+
+    // If the body is a single `while (true) { ... }` (or `while (1)`), return
+    // just the inner block. Depth counter matches braces so any `while(true)`
+    // that starts and ends the whole body is detected regardless of what
+    // lives inside. If the body has anything before/after that while, we
+    // leave it alone.
+    function stripOuterWhileTrue(body) {
+        const trimmed = body.replace(/^\s+|\s+$/g, '');
+        const m = trimmed.match(/^while\s*\(\s*(?:true|1)\s*\)\s*\{/i);
+        if (!m) return body;
+        const openBrace = m[0].length - 1;
+        let depth = 1;
+        for (let i = openBrace + 1; i < trimmed.length; i++) {
+            const ch = trimmed.charAt(i);
+            if (ch === '{') depth++;
+            else if (ch === '}') {
+                depth--;
+                if (depth === 0) {
+                    // Anything after the closing brace? If so, keep original.
+                    const tail = trimmed.substring(i + 1).replace(/\s+/g, '');
+                    if (tail.length !== 0) return body;
+                    return trimmed.substring(openBrace + 1, i);
+                }
+            }
+        }
+        return body;
+    }
 
     // Extract the body between `void setup()` (or `loop()`) and its matching
     // closing brace, using a depth counter so nested { } don't fool us.
@@ -112,10 +148,18 @@ goog.require('Blockly.Arduino');
             'static void userSetup()\n{\n' +
             setup.body.replace(/^\n+|\n+$/g, '') + '\n' +
             '}\n\n';
+
+        // MATRIXblock's control_forever emits `while(true) { ... }` wrapping
+        // the whole loop body. That would starve BLERuntime.poll() forever
+        // because our driver calls userLoop() from the main loop() and
+        // never gets control back. Arduino's loop() is already auto-repeating,
+        // so we strip a single outer `while (true) { ... }` (or `while (1)`).
+        // Nested while(true) inside user code is left untouched -- that will
+        // still starve BLE, but at that point the student made a real choice.
+        const loopBody = stripOuterWhileTrue(
+            loop.body.replace(/^\n+|\n+$/g, ''));
         const userLoop =
-            'static void userLoop()\n{\n' +
-            loop.body.replace(/^\n+|\n+$/g, '') + '\n' +
-            '}\n\n';
+            'static void userLoop()\n{\n' + loopBody + '\n}\n\n';
         const driver =
             'void setup()\n{\n' +
             '  userSetup();\n' +

@@ -6,21 +6,33 @@
 goog.provide('Blockly.BytecodeVM.control');
 goog.require('Blockly.BytecodeVM');
 
-// control_setup / mini_setup — collect body into _setupCode, emit nothing.
+// control_setup / mini_setup have TWO substacks in MATRIXblock:
+//   SUBSTACK  -- setup body, runs once at boot -> _setupCode preamble
+//   SUBSTACK2 -- main loop body, runs forever  -> returned as main body
+// The Arduino generator glues SUBSTACK2 into loops_['loop']; we return it
+// so finish() wraps it in the main-label -> J:main loop.
+//
+// The setup block also carries three fields (battery cell count, UART enable,
+// baud rate) that only matter for the C++ side (they configure Serial and
+// battery calibration). The VM does not need them, so we ignore them here.
 Blockly.BytecodeVM['control_setup'] = function () {
-    const branch = Blockly.BytecodeVM.statementToCode(this, 'SUBSTACK');
-    if (branch && branch.trim().length) {
-        Blockly.BytecodeVM._setupCode += branch;
+    const G = Blockly.BytecodeVM;
+    const setupBody = G.statementToCode(this, 'SUBSTACK')  || '';
+    const loopBody  = G.statementToCode(this, 'SUBSTACK2') || '';
+    if (setupBody.trim().length) {
+        G._setupCode += setupBody;
     }
-    return '';
+    return loopBody;
 };
 Blockly.BytecodeVM['mini_setup'] = Blockly.BytecodeVM['control_setup'];
 
-// control_wait — Blockly's TIMES is seconds; VM DELAY_MS is milliseconds.
+// control_wait -- MATRIXblock's TIMES is already in milliseconds (matches
+// the Arduino generator which emits `delay(TIMES)` verbatim). No unit
+// conversion needed; just push the value and drop into DELAY_MS.
 Blockly.BytecodeVM['control_wait'] = function () {
     const G = Blockly.BytecodeVM;
-    const secs = G.valueToCode(this, 'TIMES', G.ORDER_ATOMIC) || G.pushInt(0);
-    return secs + G.pushInt(1000) + G.byte(G.OPS.MUL) + G.byte(G.OPS.DELAY_MS);
+    const ms = G.valueToCode(this, 'TIMES', G.ORDER_ATOMIC) || G.pushInt(0);
+    return ms + G.byte(G.OPS.DELAY_MS);
 };
 
 Blockly.BytecodeVM['control_if'] = function () {

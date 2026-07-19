@@ -97,5 +97,39 @@ if (pass1 === 'garbage without setup or loop\n')
     ok('gracefully passes through when setup/loop not found');
 else no('should have returned unchanged: ' + pass1);
 
+// ---- 6. Strip outer while(true) so BLE.poll() doesn't starve -------------
+A.__originalFinish = () => '' +
+    '#include "MatrixMiniR4.h"\n\n' +
+    'void setup()\n{\n  MiniR4.begin();\n}\n\n' +
+    'void loop()\n{\n' +
+    '  while(true)\n  {\n' +
+    '    MiniR4.LED.setColor(1, 255, 0, 0);\n    delay(1000);\n' +
+    '  }\n' +
+    '}\n';
+const stripped = A.finish('');
+if (stripped.indexOf('while(true)') < 0 && stripped.indexOf('while (true)') < 0
+    && stripped.indexOf('while (1)') < 0)
+    ok('outer while(true) removed from userLoop');
+else no('outer while(true) NOT stripped -- will starve BLE');
+
+if (stripped.indexOf('MiniR4.LED.setColor(1, 255, 0, 0);') >= 0
+    && stripped.indexOf('delay(1000);') >= 0)
+    ok('loop body preserved after stripping while(true)');
+else no('loop body lost during strip');
+
+// Nested while(true) inside a control_if MUST NOT be stripped (that's a
+// user choice; we only touch a while that spans the entire loop body).
+A.__originalFinish = () => '' +
+    '#include "MatrixMiniR4.h"\n\n' +
+    'void setup()\n{\n  MiniR4.begin();\n}\n\n' +
+    'void loop()\n{\n' +
+    '  if (something) {\n    while (true) { foo(); }\n  }\n' +
+    '  bar();\n' +
+    '}\n';
+const nested = A.finish('');
+if (nested.indexOf('while (true) { foo(); }') >= 0)
+    ok('non-outer while(true) preserved');
+else no('should not have touched inner while(true)');
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\n' + pass + '/' + pass + ' passed');
 process.exitCode = fail ? 1 : 0;
