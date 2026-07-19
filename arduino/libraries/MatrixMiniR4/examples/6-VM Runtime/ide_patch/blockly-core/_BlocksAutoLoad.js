@@ -28,6 +28,7 @@ const BytecodeFiles = [
   "operators",
   "_mini",
   "pins",
+  "drivedc",
 ];
 
 //Loading Blocks
