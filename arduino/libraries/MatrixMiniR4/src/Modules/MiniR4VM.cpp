@@ -195,17 +195,30 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
 {
     int32_t a, b, c, d;
     switch (op) {
-        case VMOp::DELAY_MS:
-            // Route through BLERuntime.delay() so BLE.poll() gets serviced
-            // every ~5 ms during long waits. Without this, a BLE-uploaded
-            // program with wait blocks in a forever loop starves the ATT
-            // link and the central peer eventually drops the connection.
-            // BLERuntime.delay() degrades to raw delay() when the BLE stack
-            // is down, so it's safe to call unconditionally here.
-            // Mirrors the USB-side fix from commit 95139fb.
+        case VMOp::DELAY_MS: {
+            // Slice the wait into ~5 ms chunks and service BLE between them
+            // so the ATT link stays responsive during long waits. We cannot
+            // call BLERuntime.delay() from here: that method calls poll(),
+            // and poll() advances the VM by STEPS_PER_POLL steps -- if any
+            // of those steps hits another DELAY_MS we recurse into
+            // BLERuntime.delay() -> poll() -> step() and blow the stack.
+            // pollBleOnly() drives ArduinoBLE without touching the VM, so
+            // no re-entrancy path exists.
             if (!pop(a)) return Result::ERR_STACK_UNDERFLOW;
-            if (a > 0) BLERuntime.delay((uint32_t)a);
+            if (a <= 0) return Result::OK;
+            constexpr uint32_t SLICE_MS = 5;
+            const uint32_t start = millis();
+            const uint32_t total = (uint32_t)a;
+            while ((uint32_t)(millis() - start) < total) {
+                if (!_running) return Result::HALTED;   // CMD_STOP or halt()
+                BLERuntime.pollBleOnly();
+                const uint32_t elapsed = (uint32_t)(millis() - start);
+                if (elapsed >= total) break;
+                const uint32_t remaining = total - elapsed;
+                ::delay(remaining < SLICE_MS ? remaining : SLICE_MS);
+            }
             return Result::OK;
+        }
 
         case VMOp::MILLIS:
             return push((int32_t)millis()) ? Result::OK : Result::ERR_STACK_OVERFLOW;

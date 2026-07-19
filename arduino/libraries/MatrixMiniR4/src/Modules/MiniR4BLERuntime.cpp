@@ -216,6 +216,11 @@ bool MiniR4BLERuntimeClass::setDeviceName(const char* name)
     return _writeDeviceName(name);
 }
 
+void MiniR4BLERuntimeClass::pollBleOnly()
+{
+    if (_bleActive) BLE.poll();
+}
+
 void MiniR4BLERuntimeClass::delay(uint32_t ms)
 {
     // BLE not up (kill switch, or begin() never called): behave like

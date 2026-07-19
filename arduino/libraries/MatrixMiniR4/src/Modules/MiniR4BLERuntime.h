@@ -91,6 +91,18 @@ public:
     void delay(uint32_t ms);
 
     /**
+     * @brief Service ArduinoBLE without advancing the VM.
+     *
+     * The full poll() drives BLE.poll() *and* steps the VM. That works for
+     * the outer loop() but not from inside VM code: the VM's DELAY_MS opcode
+     * needs to slice a wait into poll windows without re-entering step(),
+     * which would recurse into delay() and blow the stack.
+     *
+     * No-op when the BLE stack is down.
+     */
+    void pollBleOnly();
+
+    /**
      * @brief Persist a custom BLE local name (max 24 printable ASCII chars).
      *
      * Overwrites dataflash block 6. Empty or invalid names are rejected.
