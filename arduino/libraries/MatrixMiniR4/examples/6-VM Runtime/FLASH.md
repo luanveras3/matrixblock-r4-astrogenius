@@ -103,6 +103,44 @@ Almost every failure I've seen falls into one of these:
   proper 5V USB supply, not a low-power hub. This was the 2026-07-18 debug
   rabbit hole; see `SESSION_2026-07-18_ALWAYS_ON_BLE.md`.
 
+## Program size limits (BLE upload path)
+
+The BLE runtime persists uploaded bytecode to dataflash blocks 1..4, which
+caps a single upload at **4096 bytes**. `CMD_START` refuses anything
+larger. Rough sizes per Blockly block:
+
+| Pattern                          | Bytes    |
+|----------------------------------|----------|
+| `control_forever`                | ~3       |
+| `if / else` branch               | ~6       |
+| `LED cor R,G,B`                  | ~9       |
+| `DriveDC on(30, 30)`             | ~7       |
+| `set var = 5`                    | ~4       |
+| `if sensor > 500`                | ~11      |
+| `math_number` int8 / int32       | 2 / 5    |
+
+Rule of thumb: **~10 bytes per block**. Practical ceiling:
+
+- 200 blocks ≈ 2 KB — fits easily
+- 400 blocks ≈ 4 KB — approaching the wall
+- 1000 blocks ≈ 10 KB — refused at CMD_START
+
+Competition programs hit this earlier because they duplicate mission
+patterns. Two levers exist but are **not yet implemented**:
+
+1. **`procedures_*` blocks (My Blocks)** — wire the 4 procedure blocks
+   to the existing `CALL` / `RET` opcodes so students can extract
+   `alinha_linha`, `vai_ate_marca`, etc. Typical competition workspace
+   shrinks 30-50 % because repeated mission code becomes one
+   subroutine. Highest ROI lever. Estimated 4-6 h to implement (symbol
+   table + args + local var slots).
+2. **Grow `MAX_PROGRAM` to 5 KB** — the free dataflash block 7 (or a
+   reshuffle of blocks 5-6) buys +1 KB. Only ~25 % headroom on its own;
+   pairs well with (1) but doesn't fix the root duplication problem.
+
+For now, if a workspace hits the ceiling, USB compile still works
+(no 4 KB limit there — the sketch just gets bigger).
+
 ## The wrapper vs this standalone sketch
 
 Most flashes in normal use go through the MATRIXblock IDE, which wraps
