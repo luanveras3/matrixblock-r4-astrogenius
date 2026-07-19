@@ -29,6 +29,8 @@ constexpr uint16_t HEADER_SIZE     = 8;
 constexpr uint32_t DATAFLASH_BLOCK = 1024;
 constexpr uint32_t DATAFLASH_BASE  = 1024;                      // start of block 1
 constexpr uint32_t ENABLE_FLAG_ADDR = DATAFLASH_BASE + 4 * DATAFLASH_BLOCK; // block 5
+constexpr uint32_t SKETCH_ID_ADDR   = ENABLE_FLAG_ADDR + 4;                 // block 5 offset 4
+constexpr uint32_t SKETCH_ID_UNSET  = 0xFFFFFFFFu;
 constexpr uint8_t  MAGIC[4]        = {'M', 'B', 'R', '4'};
 constexpr uint8_t  STEPS_PER_POLL  = 32;
 constexpr uint32_t TOGGLE_HOLD_MS  = 3000;
@@ -76,6 +78,7 @@ MiniR4BLERuntimeClass::MiniR4BLERuntimeClass()
     , _currentLedState(0xFF)
     , _bothButtonsSince(0)
     , _gestureLatched(false)
+    , _pendingSketchId(SKETCH_ID_UNSET)
 {
     g_instance = this;
 }
@@ -99,9 +102,27 @@ void MiniR4BLERuntimeClass::begin()
     Serial.println(_bleEnabled ? F("YES") : F("NO"));
 #endif
 
+    // USB-reflash detection. The IDE wrapper injects a per-build random ID
+    // via setSketchId() before begin(). If the running sketch's ID differs
+    // from what's stored in dataflash, a fresh USB upload happened and any
+    // previously stored BLE bytecode is stale -- wipe it so userLoop() wins.
+    // If setSketchId() was never called, skip the check entirely (used by
+    // the standalone receiver-only sketch).
+    const uint32_t storedSketchId = _readStoredSketchId();
+    const bool sketchIdChanged =
+        (_pendingSketchId != SKETCH_ID_UNSET) &&
+        (_pendingSketchId != storedSketchId);
+    if (sketchIdChanged) {
+        BLERT_TRACE("sketch id changed -- wiping stored program");
+        (void)_eraseFlash();
+        _writeBlock5(_bleEnabled, _pendingSketchId);
+    }
+
     if (_loadFromFlash() && _programSize > 0) {
         _vm.loadProgram(g_programBuf, _programSize);
-        _vm.halt();   // program loaded but not auto-run
+        // Auto-run: whatever is in dataflash is the "current program" and
+        // takes over from userLoop(). The wrapper's loop() will skip
+        // userLoop() while isRunningVM() stays true.
         BLERT_TRACE("loaded stored program from dataflash");
     } else {
         BLERT_TRACE("no stored program");
@@ -168,6 +189,11 @@ void MiniR4BLERuntimeClass::poll()
         _updateLed(_programSize > 0 ? 1 : 0);
     }
     _wasRunning = nowRunning;
+}
+
+void MiniR4BLERuntimeClass::setSketchId(uint32_t id)
+{
+    _pendingSketchId = id;
 }
 
 void MiniR4BLERuntimeClass::delay(uint32_t ms)
@@ -309,9 +335,11 @@ bool MiniR4BLERuntimeClass::_eraseFlash()
     return (g_flash.erase(DATAFLASH_BASE, DATAFLASH_BLOCK) == 0);
 }
 
-// --- Enable-flag storage (block 5) ------------------------------------------
+// --- Enable-flag + sketch-ID storage (block 5) ------------------------------
 // Fresh flash reads back as 0xFF, which we interpret as "enabled" so a
 // brand-new R4 boots with BLE on by default. Writing 0x00 disables it.
+// The sketch ID at offset 4 identifies the running compiled sketch so the
+// runtime can detect a fresh USB reflash and wipe stale bytecode.
 
 bool MiniR4BLERuntimeClass::_readEnableFlag()
 {
@@ -320,14 +348,40 @@ bool MiniR4BLERuntimeClass::_readEnableFlag()
     return v != 0x00;
 }
 
+uint32_t MiniR4BLERuntimeClass::_readStoredSketchId()
+{
+    alignas(4) uint8_t buf[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    if (g_flash.read(buf, SKETCH_ID_ADDR, 4) != 0) return SKETCH_ID_UNSET;
+    return (uint32_t)buf[0]
+         | ((uint32_t)buf[1] << 8)
+         | ((uint32_t)buf[2] << 16)
+         | ((uint32_t)buf[3] << 24);
+}
+
 void MiniR4BLERuntimeClass::_writeEnableFlag(bool enabled)
 {
-    // Erase the whole block, then program a single 4-byte word at offset 0.
-    // Alignment: the RA4M1 dataflash needs 4-byte-aligned programming.
+    // Preserve whatever sketch ID is already stored -- writing block 5 must
+    // never clobber the USB-reflash detector.
+    _writeBlock5(enabled, _readStoredSketchId());
+}
+
+void MiniR4BLERuntimeClass::_writeBlock5(bool enabled, uint32_t sketchId)
+{
+    // Erase the whole block, then program the enable-flag word + sketch-ID
+    // word in one 8-byte shot. RA4M1 dataflash needs 4-byte-aligned writes.
     if (g_flash.erase(ENABLE_FLAG_ADDR, DATAFLASH_BLOCK) != 0) return;
-    if (enabled) return;   // erased = 0xFF everywhere = enabled; no write needed
-    alignas(4) uint8_t word[4] = {0x00, 0xFF, 0xFF, 0xFF};
-    (void)g_flash.program(word, ENABLE_FLAG_ADDR, sizeof(word));
+    // Erased flash reads 0xFF everywhere. If we want the "default" state
+    // (enabled + no-ID) we can skip the write entirely.
+    if (enabled && sketchId == SKETCH_ID_UNSET) return;
+
+    alignas(4) uint8_t buf[8];
+    buf[0] = enabled ? 0xFF : 0x00;
+    buf[1] = buf[2] = buf[3] = 0xFF;
+    buf[4] = (uint8_t)( sketchId        & 0xFF);
+    buf[5] = (uint8_t)((sketchId >>  8) & 0xFF);
+    buf[6] = (uint8_t)((sketchId >> 16) & 0xFF);
+    buf[7] = (uint8_t)((sketchId >> 24) & 0xFF);
+    (void)g_flash.program(buf, ENABLE_FLAG_ADDR, sizeof(buf));
 }
 
 // --- BLE responses ----------------------------------------------------------

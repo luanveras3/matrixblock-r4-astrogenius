@@ -109,6 +109,24 @@ goog.require('Blockly.Arduino');
             '$1BLERuntime.delay$2');
     }
 
+    // Produce a fresh 32-bit sketch ID for this build. The runtime persists
+    // it to dataflash; a mismatch on the next boot is how we detect that a
+    // USB reflash just happened and wipe any stale BLE bytecode. Randomness
+    // is enough here (Math.random gives ~52 bits of entropy, we only need
+    // 32). We shift the low nibble away from 0xFF/0x00 patterns just to
+    // avoid accidental collision with the "unset" sentinel 0xFFFFFFFF.
+    function generateSketchId() {
+        let n = 0;
+        while (n === 0 || n === 0xFFFFFFFF) {
+            n = (Math.random() * 0x100000000) >>> 0;
+        }
+        return n;
+    }
+
+    function formatSketchIdLiteral(id) {
+        return '0x' + id.toString(16).padStart(8, '0').toUpperCase() + 'u';
+    }
+
     function wrapWithBLERuntime(src) {
         if (!src) return src;
 
@@ -156,6 +174,21 @@ goog.require('Blockly.Arduino');
             }
         }
 
+        // Emit a per-build MINIR4_SKETCH_ID right after the runtime include.
+        // The driver setup() below passes it to BLERuntime.setSketchId() so
+        // begin() can detect that this USB upload is different from whatever
+        // was running before and wipe any leftover BLE bytecode.
+        const sketchIdLiteral = formatSketchIdLiteral(generateSketchId());
+        const sketchIdDefine  =
+            '#define MINIR4_SKETCH_ID ((uint32_t)' + sketchIdLiteral + ')';
+        const includePos = head.indexOf(runtimeInclude);
+        if (includePos >= 0) {
+            const afterInclude = head.indexOf('\n', includePos) + 1;
+            head = head.substring(0, afterInclude)
+                 + sketchIdDefine + '\n'
+                 + head.substring(afterInclude);
+        }
+
         const userSetup =
             'static void userSetup()\n{\n' +
             setup.body.replace(/^\n+|\n+$/g, '') + '\n' +
@@ -175,6 +208,7 @@ goog.require('Blockly.Arduino');
         const driver =
             'void setup()\n{\n' +
             '  userSetup();\n' +
+            '  BLERuntime.setSketchId(MINIR4_SKETCH_ID);\n' +
             '  BLERuntime.begin();\n' +
             '}\n\n' +
             'void loop()\n{\n' +
@@ -186,8 +220,10 @@ goog.require('Blockly.Arduino');
     }
 
     // Expose for testing.
-    Blockly.Arduino.__wrapWithBLERuntime = wrapWithBLERuntime;
-    Blockly.Arduino.__rewriteDelays      = rewriteDelays;
+    Blockly.Arduino.__wrapWithBLERuntime  = wrapWithBLERuntime;
+    Blockly.Arduino.__rewriteDelays       = rewriteDelays;
+    Blockly.Arduino.__generateSketchId    = generateSketchId;
+    Blockly.Arduino.__formatSketchIdLit   = formatSketchIdLiteral;
 
     console.log('[BLE wrapper] Blockly.Arduino.finish patched.');
 })();

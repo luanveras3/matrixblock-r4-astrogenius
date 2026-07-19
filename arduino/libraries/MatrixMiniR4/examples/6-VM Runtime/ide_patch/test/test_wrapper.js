@@ -66,8 +66,8 @@ else no('userSetup missing');
 if (wrapped.indexOf('static void userLoop()') >= 0) ok('userLoop emitted');
 else no('userLoop missing');
 
-if (/void setup\(\)\s*\n\{\s*\n\s*userSetup\(\);\s*\n\s*BLERuntime\.begin\(\);/.test(wrapped))
-    ok('driver setup calls userSetup + BLERuntime.begin');
+if (/void setup\(\)\s*\n\{\s*\n\s*userSetup\(\);\s*\n\s*BLERuntime\.setSketchId\(MINIR4_SKETCH_ID\);\s*\n\s*BLERuntime\.begin\(\);/.test(wrapped))
+    ok('driver setup calls userSetup + setSketchId + BLERuntime.begin');
 else no('driver setup malformed');
 
 if (/void loop\(\)\s*\n\{\s*\n\s*BLERuntime\.poll\(\);\s*\n\s*if \(!BLERuntime\.isRunningVM\(\)\)\s*\{\s*userLoop\(\); \}/.test(wrapped))
@@ -178,6 +178,61 @@ const twiceRw = rw(once);
 if (twiceRw === 'BLERuntime.delay(500);\n')
     ok('rewrite is idempotent');
 else no('rewrite not idempotent: ' + twiceRw);
+
+// ---- 8. MINIR4_SKETCH_ID injection ---------------------------------------
+// Wrapper must emit a #define for a fresh 32-bit ID per build so the runtime
+// can detect USB reflashes and wipe stale BLE bytecode. Regenerate a small
+// simple sketch to test in isolation.
+A.__originalFinish = () => '' +
+    '#include "MatrixMiniR4.h"\n\n' +
+    'void setup()\n{\n  MiniR4.begin();\n}\n\n' +
+    'void loop()\n{\n  MiniR4.LED.setColor(1, 0, 60, 0);\n}\n';
+const idOut = A.finish('');
+
+// Format: `#define MINIR4_SKETCH_ID ((uint32_t)0xXXXXXXXXu)` on its own line.
+const idDefineRe = /#define\s+MINIR4_SKETCH_ID\s+\(\(uint32_t\)0x([0-9A-F]{8})u\)/;
+const idMatch = idOut.match(idDefineRe);
+if (idMatch) ok('sketch ID #define emitted');
+else no('sketch ID #define missing or malformed');
+
+// The #define must sit AFTER the runtime include and BEFORE the driver
+// setup() that references it -- otherwise the sketch won't compile.
+const includeIdx = idOut.indexOf('#include "Modules/MiniR4BLERuntime.h"');
+const defineIdx  = idOut.search(idDefineRe);
+const setSketchIdx = idOut.indexOf('BLERuntime.setSketchId(MINIR4_SKETCH_ID);');
+if (includeIdx >= 0 && defineIdx > includeIdx && setSketchIdx > defineIdx)
+    ok('sketch ID ordering: include < define < setSketchId call');
+else no('sketch ID out of order: include=' + includeIdx +
+        ' define=' + defineIdx + ' setSketchId=' + setSketchIdx);
+
+// The ID must not be 0 or 0xFFFFFFFF (reserved as "unset" sentinel).
+if (idMatch) {
+    const value = parseInt(idMatch[1], 16);
+    if (value !== 0 && value !== 0xFFFFFFFF)
+        ok('sketch ID avoids reserved sentinels');
+    else no('sketch ID hit reserved value: 0x' + idMatch[1]);
+}
+
+// Two back-to-back builds must produce different IDs (per-build randomness).
+A.__originalFinish = () => '' +
+    '#include "MatrixMiniR4.h"\n\nvoid setup(){}\nvoid loop(){}\n';
+const outA = A.finish('');
+const outB = A.finish('');
+const idA = (outA.match(idDefineRe) || [])[1];
+const idB = (outB.match(idDefineRe) || [])[1];
+if (idA && idB && idA !== idB) ok('successive builds get different IDs');
+else no('IDs collided: ' + idA + ' vs ' + idB);
+
+// Direct check on the helper functions.
+const gen = A.__generateSketchId;
+const fmt = A.__formatSketchIdLit;
+if (typeof gen() === 'number' && gen() !== gen())
+    ok('generateSketchId returns changing numbers');
+else no('generateSketchId not producing fresh numbers');
+if (fmt(0x12345678) === '0x12345678u') ok('formatSketchIdLit basic case');
+else no('formatSketchIdLit basic case: ' + fmt(0x12345678));
+if (fmt(0x0000000A) === '0x0000000Au') ok('formatSketchIdLit pads to 8 hex');
+else no('formatSketchIdLit padding: ' + fmt(0x0000000A));
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\n' + pass + '/' + pass + ' passed');
 process.exitCode = fail ? 1 : 0;

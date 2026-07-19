@@ -26,7 +26,11 @@
  * Dataflash map:
  *   Block 0     -- reserved for the vEEPROM lib (IMU cal @ 50..73). Untouched.
  *   Block 1..4  -- bytecode program storage (4 KB max).
- *   Block 5     -- BLE enable flag (byte at offset 0: 0xFF=on, 0x00=off).
+ *   Block 5     -- runtime state:
+ *                    offset 0     : BLE enable flag byte (0xFF=on, 0x00=off).
+ *                    offset 1..3  : padding (kept 0xFF).
+ *                    offset 4..7  : last-known sketch ID (uint32 LE);
+ *                                   0xFFFFFFFF = never set.
  *   Block 6..7  -- free.
  */
 #ifndef MINIR4_BLE_RUNTIME_H
@@ -81,6 +85,24 @@ public:
      */
     void delay(uint32_t ms);
 
+    /**
+     * @brief Tag the running sketch with a unique per-build ID.
+     *
+     * Must be called BEFORE begin(). The IDE wrapper injects one call per
+     * USB compile with a fresh random uint32. On boot, begin() compares
+     * this value against the ID stored in dataflash block 5 offset 4:
+     *   - Match  : any previously stored bytecode is still "current" and
+     *              auto-runs.
+     *   - Differ : a fresh USB upload happened; the stored bytecode is
+     *              wiped and the new sketch's userLoop() takes over.
+     *
+     * If never called (e.g. the standalone MiniR4_BLE_Runtime.ino
+     * receiver sketch), the runtime skips the compare entirely and always
+     * preserves the stored program. Passing 0xFFFFFFFF has the same
+     * "unset" effect.
+     */
+    void setSketchId(uint32_t id);
+
     /** @return true while bytecode is executing on the VM. */
     bool isRunningVM() const;
 
@@ -113,6 +135,8 @@ private:
     void _sendState();
     bool _readEnableFlag();
     void _writeEnableFlag(bool enabled);
+    uint32_t _readStoredSketchId();
+    void _writeBlock5(bool enabled, uint32_t sketchId);
 
     MiniR4VM _vm;
     uint16_t _programSize;
@@ -125,6 +149,7 @@ private:
     uint8_t  _currentLedState;
     uint32_t _bothButtonsSince;   ///< millis() when both buttons first held; 0 = not held
     bool     _gestureLatched;     ///< prevents double-firing while still holding
+    uint32_t _pendingSketchId;    ///< value passed to setSketchId(); 0xFFFFFFFF = unset
 };
 
 extern MiniR4BLERuntimeClass BLERuntime;
