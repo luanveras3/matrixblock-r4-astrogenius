@@ -21,11 +21,21 @@
             disconnect:     'Disconnect',
             connectTitle:   'Open a BLE session with a MATRIX-R4-Runtime',
             disconnectTitle:'Close the current BLE session',
-            connecting:     'Connecting to MATRIX-R4-Runtime...',
+            connecting:     'Connecting to %s...',
             connectedMsg:   'Connected. Session ready.',
             disconnected:   'Disconnected.',
             connectFail:    'Could not connect: %s',
             notConnected:   'Not connected. Click "Connect" first.',
+            modalTitle:     'BLE connection',
+            modalHubName:   'Hub name',
+            modalHubHint:   'The Bluetooth name your R4 advertises. Default is MATRIX-R4-Runtime.',
+            modalSearch:    'Search',
+            modalCancel:    'Cancel',
+            modalClose:     'Close',
+            modalStatusIdle:'Idle',
+            modalStatusBusy:'Working...',
+            modalStatusConn:'Connected to %s',
+            cancelled:      'Cancelled by user.',
             btnLabel:       'Send via BLE',
             btnTitle:       'Compile blocks to bytecode and send to the R4 over BLE',
             unsupported:    'Web Bluetooth is not available in this environment.',
@@ -51,11 +61,21 @@
             disconnect:     'Desconectar',
             connectTitle:   'Abrir sessao BLE com um MATRIX-R4-Runtime',
             disconnectTitle:'Encerrar a sessao BLE atual',
-            connecting:     'Conectando ao MATRIX-R4-Runtime...',
+            connecting:     'Conectando a %s...',
             connectedMsg:   'Conectado. Sessao pronta.',
             disconnected:   'Desconectado.',
             connectFail:    'Nao foi possivel conectar: %s',
             notConnected:   'Sem conexao. Clique em "Conectar" primeiro.',
+            modalTitle:     'Conexao BLE',
+            modalHubName:   'Nome do hub',
+            modalHubHint:   'Nome Bluetooth que o R4 anuncia. Padrao: MATRIX-R4-Runtime.',
+            modalSearch:    'Buscar',
+            modalCancel:    'Cancelar',
+            modalClose:     'Fechar',
+            modalStatusIdle:'Ocioso',
+            modalStatusBusy:'Trabalhando...',
+            modalStatusConn:'Conectado a %s',
+            cancelled:      'Cancelado pelo usuario.',
             btnLabel:       'Enviar via BLE',
             btnTitle:       'Compila os blocos para bytecode e envia para o R4 por BLE',
             unsupported:    'Web Bluetooth nao esta disponivel neste ambiente.',
@@ -95,7 +115,25 @@
     const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
     const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
     const NUS_TX      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
-    const DEVICE_NAME = 'MATRIX-R4-Runtime';
+    const DEFAULT_DEVICE_NAME = 'MATRIX-R4-Runtime';
+    const DEVICE_NAME_KEY = 'ble.deviceName';
+    function getDeviceName() {
+        try {
+            const stored = window.localStorage.getItem(DEVICE_NAME_KEY);
+            if (stored && stored.trim()) return stored.trim();
+        } catch (e) {}
+        return DEFAULT_DEVICE_NAME;
+    }
+    function setDeviceName(name) {
+        const clean = (name || '').trim();
+        try {
+            if (clean && clean !== DEFAULT_DEVICE_NAME) {
+                window.localStorage.setItem(DEVICE_NAME_KEY, clean);
+            } else {
+                window.localStorage.removeItem(DEVICE_NAME_KEY);
+            }
+        } catch (e) {}
+    }
 
     const CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END = 0x03;
     const CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06, CMD_INFO = 0x07;
@@ -150,7 +188,55 @@
         session: null,
         connecting: false,
         uploading: false,
+        cancelRequested: false,   // set by cancel(); checked at every await point
     };
+
+    // Thrown from inside connect()/uploadProgram() when the user hits Cancel
+    // so callers can distinguish deliberate abort from a real BLE failure.
+    class CancelledError extends Error {
+        constructor() { super('cancelled'); this.name = 'CancelledError'; }
+    }
+
+    // Instant-cancel plumbing. Every await in the connect/upload paths races
+    // against `cancelPromise`. Calling cancel() rejects that promise, so the
+    // caller unblocks in the same microtask tick rather than waiting for the
+    // underlying native operation to time out on its own.
+    let cancelPromise = null;
+    let cancelReject  = null;
+    function armCancel() {
+        state.cancelRequested = false;
+        cancelPromise = new Promise((_, rej) => { cancelReject = rej; });
+        cancelPromise.catch(() => {});   // silence "unhandled rejection" when nobody races
+    }
+    function disarmCancel() {
+        state.cancelRequested = false;
+        cancelPromise = null;
+        cancelReject  = null;
+    }
+    function raceCancel(op) {
+        return cancelPromise ? Promise.race([op, cancelPromise]) : op;
+    }
+    function sleepCancelable(ms) {
+        return raceCancel(new Promise(r => setTimeout(r, ms)));
+    }
+
+    function cancel() {
+        console.log('[BLE] cancel() invoked, connecting=' + state.connecting +
+                    ' uploading=' + state.uploading);
+        if (!state.connecting && !state.uploading) return;
+        state.cancelRequested = true;
+        // Reject the shared cancel-promise -- every await currently racing
+        // against it will throw CancelledError on the next microtask.
+        if (cancelReject) cancelReject(new CancelledError());
+        // Tear down the GATT link too so native Chromium calls
+        // (getPrimaryService, writeValueWithResponse) unblock instead of
+        // sitting on their internal ~15 s timeout. The picker itself is
+        // OS-controlled and cannot be dismissed programmatically.
+        try {
+            if (state.device && state.device.gatt) state.device.gatt.disconnect();
+        } catch (e) {}
+        updateModal();
+    }
 
     // --- BLE session helper -------------------------------------------------
     class Session {
@@ -208,16 +294,16 @@
         async uploadProgram(bytes) {
             const size = bytes.length;
             const t0 = performance.now();
-            let ack = await this.send(CMD_START, new Uint8Array([size & 0xFF, (size >> 8) & 0xFF]));
+            let ack = await raceCancel(this.send(CMD_START, new Uint8Array([size & 0xFF, (size >> 8) & 0xFF])));
             if (ack.status !== 0) throw new Error(fmt(tr('reject'), ack.status));
             for (let off = 0; off < size; off += CHUNK_SIZE) {
                 const chunk = bytes.slice(off, Math.min(off + CHUNK_SIZE, size));
-                ack = await this.send(CMD_CHUNK, chunk);
+                ack = await raceCancel(this.send(CMD_CHUNK, chunk));
                 if (ack.status !== 0) {
                     throw new Error(fmt(tr('chunkReject'), off, ack.status));
                 }
             }
-            ack = await this.send(CMD_END);
+            ack = await raceCancel(this.send(CMD_END));
             if (ack.status !== 0) throw new Error(fmt(tr('endReject'), ack.status));
             return performance.now() - t0;
         }
@@ -235,13 +321,16 @@
         if (state.session) return;
         if (!navigator.bluetooth) { log(tr('unsupported'), 'error'); return; }
         state.connecting = true;
+        armCancel();
         updateConnectButton();
+        updateModal();
+        const deviceName = getDeviceName();
         try {
-            log(tr('connecting'));
-            state.device = await navigator.bluetooth.requestDevice({
-                filters: [{ name: DEVICE_NAME }],
+            log(fmt(tr('connecting'), deviceName));
+            state.device = await raceCancel(navigator.bluetooth.requestDevice({
+                filters: [{ name: deviceName }],
                 optionalServices: [NUS_SERVICE],
-            });
+            }));
             state.device.addEventListener('gattserverdisconnected', () => {
                 log(tr('disconnected'));
                 state.session = null;
@@ -263,22 +352,23 @@
             for (let attempt = 0; attempt < 4; attempt++) {
                 try {
                     if (!state.device.gatt.connected) {
-                        server = await state.device.gatt.connect();
+                        server = await raceCancel(state.device.gatt.connect());
                     } else {
                         server = state.device.gatt;
                     }
-                    service = await server.getPrimaryService(NUS_SERVICE);
+                    service = await raceCancel(server.getPrimaryService(NUS_SERVICE));
                     break;
                 } catch (e) {
+                    if (e instanceof CancelledError) throw e;
                     if (attempt === 3) throw e;
                     log('Retry ' + (attempt + 1) + '/3: ' +
                         ((e && e.message) || e), 'info');
-                    await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+                    await sleepCancelable(300 * (attempt + 1));
                 }
             }
-            const rx = await service.getCharacteristic(NUS_RX);
-            const tx = await service.getCharacteristic(NUS_TX);
-            await tx.startNotifications();
+            const rx = await raceCancel(service.getCharacteristic(NUS_RX));
+            const tx = await raceCancel(service.getCharacteristic(NUS_TX));
+            await raceCancel(tx.startNotifications());
             state.session = new Session(rx, tx);
             // Sanity ping: ask the R4 for its current STATE. If we don't get
             // a response within 3s we know the R4 accepted the GATT session
@@ -289,8 +379,8 @@
                     state.session._onState = () => resolve(true);
                     setTimeout(() => resolve(false), 3000);
                 });
-                await state.session.send(CMD_INFO);
-                const alive = await gotState;
+                await raceCancel(state.session.send(CMD_INFO));
+                const alive = await raceCancel(gotState);
                 state.session._onState = null;
                 if (!alive) {
                     log('R4 accepted the connection but did not answer the ' +
@@ -300,18 +390,26 @@
                     return;
                 }
             } catch (e) {
+                if (e instanceof CancelledError) throw e;
                 log('Sanity ping failed: ' + ((e && e.message) || e), 'error');
                 await disconnect();
                 return;
             }
             log(tr('connectedMsg'), 'ok');
         } catch (e) {
-            log(fmt(tr('connectFail'), (e && e.message) || String(e)), 'error');
+            if (e instanceof CancelledError) {
+                log(tr('cancelled'));
+                try { if (state.device && state.device.gatt && state.device.gatt.connected) state.device.gatt.disconnect(); } catch (_) {}
+            } else {
+                log(fmt(tr('connectFail'), (e && e.message) || String(e)), 'error');
+            }
             state.device = null;
             state.session = null;
         } finally {
             state.connecting = false;
+            disarmCancel();
             updateConnectButton();
+            updateModal();
         }
     }
 
@@ -324,6 +422,7 @@
         state.device = null;
         log(tr('disconnected'));
         updateConnectButton();
+        updateModal();
     }
 
     // --- Compile helpers ----------------------------------------------------
@@ -369,6 +468,8 @@
         }
 
         state.uploading = true;
+        armCancel();
+        updateModal();
         try {
             log(tr('compiling'));
             let compiled;
@@ -415,7 +516,7 @@
             // so we must NOT hold state.uploading while waiting for it. Fire
             // the run command, then release the lock; a background listener
             // still surfaces HALT / VM error events as they arrive.
-            await state.session.run();
+            await raceCancel(state.session.run());
             state.session._onState = (s) => {
                 if (s.running === 0) {
                     if (s.err && s.err !== 1 /* HALTED */) {
@@ -427,9 +528,100 @@
                 }
             };
         } catch (e) {
-            log('Unhandled: ' + ((e && e.message) || e), 'error');
+            if (e instanceof CancelledError) log(tr('cancelled'));
+            else log('Unhandled: ' + ((e && e.message) || e), 'error');
         } finally {
             state.uploading = false;
+            disarmCancel();
+            updateModal();
+        }
+    }
+
+    // --- BLE control modal --------------------------------------------------
+    // A single self-styled modal that hosts the connect / search / cancel /
+    // disconnect flow so the user never gets stuck on a retry loop with no
+    // way out. Uses a custom lightweight overlay (no bootstrap-js dependency)
+    // to stay decoupled from whatever the IDE build ships.
+    let modalEl = null;
+    function ensureModal() {
+        if (modalEl && document.body.contains(modalEl)) return modalEl;
+        modalEl = document.createElement('div');
+        modalEl.id = 'bleControlModal';
+        modalEl.style.cssText =
+            'position:fixed;inset:0;display:none;align-items:center;' +
+            'justify-content:center;background:rgba(0,0,0,.45);' +
+            'z-index:100000;font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;';
+        modalEl.innerHTML =
+            '<div style="background:#fff;color:#111;border-radius:8px;' +
+            'width:420px;max-width:92vw;padding:18px 20px;box-shadow:0 8px 32px rgba(0,0,0,.35);">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+                '<h5 id="bleModalTitle" style="margin:0;font:600 16px/1.2 inherit;">BLE</h5>' +
+                '<button id="bleModalClose" type="button" style="background:none;border:0;font-size:20px;cursor:pointer;color:#555;">&times;</button>' +
+              '</div>' +
+              '<div style="margin-bottom:10px;">' +
+                '<label id="bleModalNameLabel" for="bleModalName" style="display:block;font-weight:600;margin-bottom:4px;">Hub name</label>' +
+                '<input id="bleModalName" type="text" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font:inherit;" placeholder="MATRIX-R4-Runtime" />' +
+                '<div id="bleModalNameHint" style="font-size:12px;color:#666;margin-top:4px;"></div>' +
+              '</div>' +
+              '<div id="bleModalStatus" style="margin:12px 0;padding:8px 10px;background:#f4f4f5;border-radius:4px;font-family:monospace;font-size:12px;color:#333;"></div>' +
+              '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">' +
+                '<button id="bleModalCancel" type="button" style="padding:6px 14px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:4px;cursor:pointer;">Cancel</button>' +
+                '<button id="bleModalDisconnect" type="button" style="padding:6px 14px;border:1px solid #64748b;background:#fff;color:#64748b;border-radius:4px;cursor:pointer;">Disconnect</button>' +
+                '<button id="bleModalSearch" type="button" style="padding:6px 14px;border:0;background:#2563eb;color:#fff;border-radius:4px;cursor:pointer;">Search</button>' +
+              '</div>' +
+            '</div>';
+        document.body.appendChild(modalEl);
+
+        // Wire once.
+        modalEl.addEventListener('click', (ev) => {
+            if (ev.target === modalEl) closeModal();   // click backdrop
+        });
+        document.getElementById('bleModalClose').addEventListener('click', closeModal);
+        document.getElementById('bleModalSearch').addEventListener('click', () => {
+            const name = document.getElementById('bleModalName').value;
+            setDeviceName(name);
+            connect();
+        });
+        document.getElementById('bleModalCancel').addEventListener('click', cancel);
+        document.getElementById('bleModalDisconnect').addEventListener('click', () => {
+            disconnect();
+        });
+        return modalEl;
+    }
+
+    function openModal() {
+        const m = ensureModal();
+        document.getElementById('bleModalTitle').textContent = tr('modalTitle');
+        document.getElementById('bleModalNameLabel').textContent = tr('modalHubName');
+        document.getElementById('bleModalNameHint').textContent = tr('modalHubHint');
+        document.getElementById('bleModalSearch').textContent = tr('modalSearch');
+        document.getElementById('bleModalCancel').textContent = tr('modalCancel');
+        document.getElementById('bleModalDisconnect').textContent = tr('disconnect');
+        document.getElementById('bleModalClose').title = tr('modalClose');
+        document.getElementById('bleModalName').value = getDeviceName();
+        m.style.display = 'flex';
+        updateModal();
+    }
+    function closeModal() {
+        if (modalEl) modalEl.style.display = 'none';
+    }
+    function updateModal() {
+        if (!modalEl || modalEl.style.display === 'none') return;
+        const busy = state.connecting || state.uploading;
+        const connected = !!state.session;
+        const nameField = document.getElementById('bleModalName');
+        const search    = document.getElementById('bleModalSearch');
+        const cancelBtn = document.getElementById('bleModalCancel');
+        const disc      = document.getElementById('bleModalDisconnect');
+        const status    = document.getElementById('bleModalStatus');
+        if (nameField)  nameField.disabled = busy || connected;
+        if (search)     search.disabled    = busy || connected;
+        if (cancelBtn)  cancelBtn.style.display = busy ? '' : 'none';
+        if (disc)       disc.style.display     = (connected && !busy) ? '' : 'none';
+        if (status) {
+            if (busy)       status.textContent = tr('modalStatusBusy');
+            else if (connected) status.textContent = fmt(tr('modalStatusConn'), getDeviceName());
+            else            status.textContent = tr('modalStatusIdle');
         }
     }
 
@@ -475,8 +667,7 @@
                 '<span id="bleConnectButton">&nbsp;' + tr('connect') + '</span>';
             c.addEventListener('click', (ev) => {
                 ev.preventDefault(); ev.stopPropagation();
-                if (state.session) disconnect();
-                else connect();
+                openModal();
             });
             parent.insertBefore(c, uploadLink.nextSibling);
             updateConnectButton();
