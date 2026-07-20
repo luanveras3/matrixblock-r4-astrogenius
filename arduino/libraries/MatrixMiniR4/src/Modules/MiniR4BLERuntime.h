@@ -162,6 +162,7 @@ private:
     bool _eraseFlash();
     void _sendAck(uint8_t cmd, uint8_t status);
     void _sendState();
+    void _sendTelemetry();
     bool _readEnableFlag();
     void _writeEnableFlag(bool enabled);
     uint32_t _readStoredSketchId();

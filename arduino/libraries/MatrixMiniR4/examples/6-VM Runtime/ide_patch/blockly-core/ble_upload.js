@@ -63,6 +63,31 @@
             runReject:      'RUN rejected (status %d).',
             emptyWorkspace: 'The workspace is empty.',
             trivialPayload: 'Compiled payload is trivial (%d bytes) -- likely all your blocks are unsupported by the BLE runtime yet. USB upload still works.',
+            // --- Robot status sidebar (phase 1: connection, battery, VM, IMU) ---
+            sbTitle:        'Robot',
+            sbSectionConn:  'Connection',
+            sbSectionVm:    'Program',
+            sbSectionImu:   'Orientation',
+            sbHub:          'Hub',
+            sbBattery:      'Battery',
+            sbVmState:      'State',
+            sbVmRunning:    'Running',
+            sbVmIdle:       'Idle',
+            sbVmError:      'Error %d',
+            sbVmSize:       'Program %d B',
+            sbVmPc:         'PC %d',
+            sbImuRoll:      'Roll',
+            sbImuPitch:     'Pitch',
+            sbImuYaw:       'Yaw',
+            sbButtons:      'Buttons',
+            sbBtnDown:      'DOWN',
+            sbBtnUp:        'UP',
+            sbHide:         'Hide',
+            hudTabCode:     'Code',
+            hudTabHud:      'HUD',
+            hudTabLog:      'Log',
+            sbLogEmpty:     'No BLE activity yet. Connect to a hub to start.',
+            sbAwaitingConn: 'Waiting for a BLE connection...',
         },
         'pt-BR': {
             connect:        'Conectar',
@@ -111,6 +136,31 @@
             runReject:      'RUN recusado (status %d).',
             emptyWorkspace: 'A area de trabalho esta vazia.',
             trivialPayload: 'Programa compilado tem apenas %d byte(s) -- provavelmente todos seus blocos ainda nao sao suportados pelo runtime BLE. O upload por USB continua funcionando.',
+            // --- Painel de estado do robo (fase 1) ---
+            sbTitle:        'Robo',
+            sbSectionConn:  'Conexao',
+            sbSectionVm:    'Programa',
+            sbSectionImu:   'Orientacao',
+            sbHub:          'Hub',
+            sbBattery:      'Bateria',
+            sbVmState:      'Estado',
+            sbVmRunning:    'Rodando',
+            sbVmIdle:       'Parado',
+            sbVmError:      'Erro %d',
+            sbVmSize:       'Programa %d B',
+            sbVmPc:         'PC %d',
+            sbImuRoll:      'Roll',
+            sbImuPitch:     'Pitch',
+            sbImuYaw:       'Yaw',
+            sbButtons:      'Botoes',
+            sbBtnDown:      'DOWN',
+            sbBtnUp:        'UP',
+            sbHide:         'Esconder',
+            hudTabCode:     'Codigo',
+            hudTabHud:      'HUD',
+            hudTabLog:      'Log',
+            sbLogEmpty:     'Nenhuma atividade BLE ainda. Conecte-se a um hub para comecar.',
+            sbAwaitingConn: 'Aguardando conexao BLE...',
         },
     };
     function locale() {
@@ -160,49 +210,30 @@
 
     const CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END = 0x03;
     const CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06;
-    const CMD_INFO  = 0x07, CMD_SET_NAME = 0x08;
-    const RSP_ACK   = 0xA0, RSP_STATE = 0xA1;
+    const CMD_INFO  = 0x07, CMD_SET_NAME = 0x08, CMD_TELEMETRY = 0x09;
+    const RSP_ACK   = 0xA0, RSP_STATE = 0xA1, RSP_TELEMETRY = 0xA2;
+    const TELEMETRY_INTERVAL_MS = 200;   // 5 Hz sidebar refresh
 
     const CHUNK_SIZE = 60;
     const ACK_TIMEOUT_MS = 3000;
     const MAX_HUB_NAME = 24;
 
-    // --- Logging: browser console + code-Div panel + floating overlay -------
-    let overlayEl = null;
-    function overlay() {
-        if (overlayEl && document.body.contains(overlayEl)) return overlayEl;
-        overlayEl = document.createElement('div');
-        overlayEl.id = 'bleUploadOverlay';
-        overlayEl.style.cssText =
-            'position:fixed;bottom:8px;right:8px;max-width:420px;' +
-            'max-height:40vh;overflow:auto;z-index:99999;' +
-            'background:rgba(30,30,30,0.92);color:#eee;padding:6px 10px;' +
-            'border-radius:6px;font:12px/1.4 monospace;box-shadow:0 2px 8px rgba(0,0,0,.4);';
-        (document.body || document.documentElement).appendChild(overlayEl);
-        return overlayEl;
-    }
+    // --- Logging: browser console + Log tab pane ----------------------------
+    // The floating overlay is gone -- users found it distracting. Logs now go
+    // to the browser console (always) and to the "Log" tab inside the right
+    // sidebar (opt-in view: only visible when the user clicks the Log tab).
+    // We buffer entries so ones emitted before the tab is mounted still show
+    // up on first render.
+    const LOG_MAX = 500;                // ring buffer cap, oldest dropped
+    const logBuffer = [];               // { msg, kind, ts }
     function log(msg, kind) {
         const prefix = '[BLE] ';
         if (kind === 'error') console.error(prefix + msg);
         else console.log(prefix + msg);
-        const panel = document.querySelector('.console-Div');
-        if (panel) {
-            const line = document.createElement('div');
-            line.textContent = prefix + msg;
-            if (kind === 'error') line.style.color = '#c62828';
-            else if (kind === 'ok') line.style.color = '#2e7d32';
-            else line.style.color = '#555';
-            line.style.font = '12px/1.4 monospace';
-            panel.appendChild(line);
-            panel.scrollTop = panel.scrollHeight;
-        }
-        const ov = overlay();
-        const line2 = document.createElement('div');
-        line2.textContent = prefix + msg;
-        if (kind === 'error') line2.style.color = '#ff7676';
-        else if (kind === 'ok') line2.style.color = '#8bd88b';
-        ov.appendChild(line2);
-        ov.scrollTop = ov.scrollHeight;
+        const entry = { msg: prefix + msg, kind: kind, ts: Date.now() };
+        logBuffer.push(entry);
+        if (logBuffer.length > LOG_MAX) logBuffer.shift();
+        appendLogLine(entry);
     }
 
     // --- Persistent session state -------------------------------------------
@@ -301,6 +332,358 @@
         heartbeatInFlight = false;
     }
 
+    // --- Robot HUD + Log tabs (phase 1 polished) ----------------------------
+    // Injected as a 3-tab bar inside the IDE's right column (.control-Div),
+    // sibling to the existing .code-Div. Tabs: Code (default, existing Monaco
+    // view), HUD (robot dashboard), Log (BLE activity trace). Both new panes
+    // occupy the same 60% slot above .console-Div so there is no floating
+    // overlay covering the workspace.
+    //
+    // Palette + typography mirror #astro-tab-bar in views/main.html: brand
+    // teal #008184 with a #006466 border below and white ink at ~75% alpha
+    // for inactive tabs, full alpha for the active one.
+    let hudMounted = false;
+    let codeTab = null, hudTab = null, logTab = null;
+    let codeDiv = null, hudDiv = null, logDiv = null;
+    let activePane = 'code';               // 'code' | 'hud' | 'log'
+    let bleConnected = false;              // gates auto-flip on disconnect
+    let telemetryInterval = null;
+    let telemetryInFlight = false;
+
+    const BRAND_TEAL      = '#008184';
+    const BRAND_TEAL_DARK = '#006466';
+    const BRAND_AMBER     = '#ffd166';
+
+    function mountHud() {
+        if (hudMounted) return true;
+        const controlDiv = document.querySelector('.control-Div');
+        codeDiv = document.querySelector('.code-Div');
+        if (!controlDiv || !codeDiv) return false;   // IDE not ready yet
+
+        // Tab bar mirrors the .astro-tab-bar idiom from views/main.html but
+        // scoped to the right column (smaller footprint).
+        const tabBar = document.createElement('div');
+        tabBar.id = 'bleHudTabs';
+        tabBar.style.cssText =
+            'display:flex;align-items:stretch;background:' + BRAND_TEAL + ';' +
+            'border-bottom:2px solid ' + BRAND_TEAL_DARK + ';min-height:28px;' +
+            'border-top-left-radius:.5em;border-top-right-radius:.5em;' +
+            'overflow:hidden;margin-bottom:0;flex-shrink:0;';
+
+        codeTab = mkTab('bleHudTabCode', 'hudTabCode', () => setPane('code'));
+        hudTab  = mkTab('bleHudTabHud',  'hudTabHud',  () => setPane('hud'));
+        logTab  = mkTab('bleHudTabLog',  'hudTabLog',  () => setPane('log'));
+        tabBar.appendChild(codeTab);
+        tabBar.appendChild(hudTab);
+        tabBar.appendChild(logTab);
+
+        // HUD pane -- content dashboard, matches .code-Div's box shape.
+        hudDiv = document.createElement('div');
+        hudDiv.id = 'bleHudPane';
+        hudDiv.style.cssText = paneBaseStyle() + 'display:none;';
+        hudDiv.innerHTML = hudHtml();
+
+        // Log pane -- BLE activity trace, opt-in only.
+        logDiv = document.createElement('div');
+        logDiv.id = 'bleLogPane';
+        logDiv.style.cssText = paneBaseStyle() +
+            'font:11px/1.45 Menlo,Consolas,monospace;padding:8px 10px;display:none;';
+        logDiv.innerHTML =
+            '<div id="bleLogEmpty" style="color:#9b9b9b;font-style:italic;' +
+              'font-family:-apple-system,Segoe UI,sans-serif;">' +
+              tr('sbLogEmpty') + '</div>' +
+            '<div id="bleLogList"></div>';
+
+        // Restyle .code-Div: it lives ABOVE the tab bar in default IDE, but we
+        // want it BELOW our tabs. Also lose its top rounded corners so it
+        // reads as continuous with the tab bar.
+        codeDiv.style.borderTopLeftRadius  = '0';
+        codeDiv.style.borderTopRightRadius = '0';
+
+        // Order: tabBar, codeDiv, hudDiv, logDiv, consoleDiv untouched.
+        controlDiv.insertBefore(tabBar, codeDiv);
+        codeDiv.parentNode.insertBefore(hudDiv, codeDiv.nextSibling);
+        codeDiv.parentNode.insertBefore(logDiv, hudDiv.nextSibling);
+
+        function syncHeight() {
+            const h = codeDiv.getBoundingClientRect().height;
+            if (h > 0) {
+                hudDiv.style.height = h + 'px';
+                logDiv.style.height = h + 'px';
+            }
+        }
+        syncHeight();
+        window.addEventListener('resize', syncHeight);
+
+        hudMounted = true;
+        // Backfill any log lines emitted before mount.
+        for (let i = 0; i < logBuffer.length; i++) appendLogLine(logBuffer[i]);
+        setPane('code');   // start on Code; connect() flips to HUD
+        return true;
+    }
+
+    function paneBaseStyle() {
+        return 'width:100%;height:60%;' +
+            'border:1px solid hsla(0,0%,0%,.15);border-top:0;' +
+            'border-bottom-left-radius:.5em;border-bottom-right-radius:.5em;' +
+            'overflow:auto;padding:14px 16px;box-sizing:border-box;' +
+            'background:#fff;font:13px/1.5 -apple-system,Segoe UI,sans-serif;' +
+            'color:#222;';
+    }
+
+    function mkTab(id, labelKey, onClick) {
+        const b = document.createElement('button');
+        b.id = id;
+        b.dataset.labelKey = labelKey;
+        b.style.cssText = tabBaseStyle();
+        b.textContent = tr(labelKey);
+        b.addEventListener('click', onClick);
+        b.addEventListener('mouseenter', () => {
+            if (b.dataset.active !== '1') b.style.background = 'rgba(0,0,0,0.15)';
+        });
+        b.addEventListener('mouseleave', () => {
+            if (b.dataset.active !== '1') b.style.background = 'transparent';
+        });
+        return b;
+    }
+    function tabBaseStyle() {
+        return 'flex:1;background:transparent;border:0;padding:6px 10px;' +
+            'font-size:12px;color:rgba(255,255,255,0.75);cursor:pointer;' +
+            'font-family:-apple-system,Segoe UI,sans-serif;' +
+            'border-right:1px solid rgba(0,0,0,0.2);user-select:none;';
+    }
+    function paintTab(el, active) {
+        if (!el) return;
+        el.dataset.active = active ? '1' : '0';
+        el.style.color = active ? '#fff' : 'rgba(255,255,255,0.75)';
+        el.style.fontWeight = active ? '600' : '400';
+        el.style.background = active ? 'rgba(0,0,0,0.25)' : 'transparent';
+    }
+    function setPane(name) {
+        if (!hudMounted) return;
+        activePane = name;
+        codeDiv.style.display = (name === 'code') ? '' : 'none';
+        hudDiv.style.display  = (name === 'hud')  ? 'block' : 'none';
+        logDiv.style.display  = (name === 'log')  ? 'block' : 'none';
+        paintTab(codeTab, name === 'code');
+        paintTab(hudTab,  name === 'hud');
+        paintTab(logTab,  name === 'log');
+        if (name === 'code') {
+            try {
+                if (typeof monaco !== 'undefined' && monaco.editor) {
+                    const eds = monaco.editor.getEditors();
+                    if (eds && eds[0]) eds[0].layout();
+                }
+            } catch (_) {}
+        } else {
+            const h = codeDiv.getBoundingClientRect().height;
+            if (h > 0) {
+                hudDiv.style.height = h + 'px';
+                logDiv.style.height = h + 'px';
+            }
+        }
+        if (name === 'log') {
+            // Snap to newest on open.
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+    }
+
+    function hudHtml() {
+        const section = (id, labelKey, bodyHtml) =>
+            '<div style="margin-bottom:14px;">' +
+              '<div id="' + id + 'Lbl" data-label-key="' + labelKey + '" ' +
+                'style="color:' + BRAND_TEAL + ';font-size:10px;' +
+                'text-transform:uppercase;letter-spacing:.06em;' +
+                'margin-bottom:6px;font-weight:700;">' + tr(labelKey) + '</div>' +
+              bodyHtml +
+            '</div>';
+        const row = (labelKey, valueId) =>
+            '<div style="display:flex;justify-content:space-between;padding:2px 0;">' +
+              '<span data-label-key="' + labelKey + '" style="color:#4a4a4a;">' +
+                tr(labelKey) + '</span>' +
+              '<span id="' + valueId + '" style="color:#222;font-weight:600;">--</span>' +
+            '</div>';
+        const imuCell = (labelKey, valueId) =>
+            '<div style="text-align:center;">' +
+              '<div data-label-key="' + labelKey + '" style="color:#9b9b9b;' +
+                'font-size:10px;text-transform:uppercase;letter-spacing:.05em;">' +
+                tr(labelKey) + '</div>' +
+              '<div id="' + valueId + '" style="font-weight:700;font-size:18px;' +
+                'color:#222;font-variant-numeric:tabular-nums;">--</div>' +
+            '</div>';
+        return (
+            '<div id="bleHudAwaiting" style="display:none;color:#9b9b9b;' +
+              'font-style:italic;padding:6px 0 14px 0;" data-label-key="sbAwaitingConn">' +
+              tr('sbAwaitingConn') + '</div>' +
+            section('sbSecConn', 'sbSectionConn',
+                row('sbHub',     'sbHub') +
+                row('sbBattery', 'sbBatt')) +
+            section('sbSecVm',   'sbSectionVm',
+                row('sbVmState', 'sbVmState') +
+                '<div id="sbVmDetail" style="color:#9b9b9b;font-size:11px;margin-top:2px;"></div>') +
+            section('sbSecImu',  'sbSectionImu',
+                '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">' +
+                  imuCell('sbImuRoll',  'sbImuRollVal') +
+                  imuCell('sbImuPitch', 'sbImuPitchVal') +
+                  imuCell('sbImuYaw',   'sbImuYawVal') +
+                '</div>') +
+            section('sbSecBtn',  'sbButtons',
+                '<div>' +
+                  '<span id="sbBtnDown" style="display:inline-block;padding:3px 10px;' +
+                    'margin-right:6px;border-radius:4px;background:#f1f1f1;color:#9b9b9b;' +
+                    'font-size:11px;font-weight:600;letter-spacing:.05em;">DOWN</span>' +
+                  '<span id="sbBtnUp"   style="display:inline-block;padding:3px 10px;' +
+                    'border-radius:4px;background:#f1f1f1;color:#9b9b9b;' +
+                    'font-size:11px;font-weight:600;letter-spacing:.05em;">UP</span>' +
+                '</div>')
+        );
+    }
+
+    function appendLogLine(entry) {
+        if (!hudMounted || !logDiv) return;
+        const empty = logDiv.querySelector('#bleLogEmpty');
+        if (empty) empty.style.display = 'none';
+        const list = logDiv.querySelector('#bleLogList');
+        if (!list) return;
+        const line = document.createElement('div');
+        line.textContent = entry.msg;
+        line.style.cssText = 'padding:1px 0;white-space:pre-wrap;word-break:break-word;' +
+            (entry.kind === 'error' ? 'color:#c62828;'
+             : entry.kind === 'ok' ? 'color:' + BRAND_TEAL + ';'
+             : 'color:#4a4a4a;');
+        list.appendChild(line);
+        // Cap DOM to LOG_MAX lines (older ones drop as the ring buffer wraps).
+        while (list.childElementCount > LOG_MAX) list.removeChild(list.firstChild);
+        if (activePane === 'log') logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function updateHud(t) {
+        if (!hudMounted || !hudDiv) return;
+        const $ = id => hudDiv.querySelector('#' + id);
+        const volts = (t.battMv / 100).toFixed(2);
+        const battEl = $('sbBatt');
+        battEl.textContent = volts + ' V';
+        battEl.style.color = (t.battMv < 1100) ? '#c62828'
+                           : (t.battMv < 1150) ? '#ef6c00' : BRAND_TEAL;
+        const stateEl = $('sbVmState');
+        if (t.err) {
+            stateEl.textContent = tr('sbVmError').replace('%d', t.err);
+            stateEl.style.color = '#c62828';
+        } else if (t.running) {
+            stateEl.textContent = tr('sbVmRunning');
+            stateEl.style.color = BRAND_TEAL;
+        } else {
+            stateEl.textContent = tr('sbVmIdle');
+            stateEl.style.color = '#4a4a4a';
+        }
+        const detail = [];
+        if (t.size) detail.push(tr('sbVmSize').replace('%d', t.size));
+        if (t.running) detail.push(tr('sbVmPc').replace('%d', t.pc));
+        $('sbVmDetail').textContent = detail.join(' - ');
+        $('sbImuRollVal').textContent  = t.roll.toFixed(1);
+        $('sbImuPitchVal').textContent = t.pitch.toFixed(1);
+        $('sbImuYawVal').textContent   = t.yaw.toFixed(1);
+        const dEl = $('sbBtnDown'), uEl = $('sbBtnUp');
+        const on  = 'background:' + BRAND_AMBER + ';color:#333;';
+        const off = 'background:#f1f1f1;color:#9b9b9b;';
+        dEl.style.cssText = 'display:inline-block;padding:3px 10px;margin-right:6px;' +
+            'border-radius:4px;font-size:11px;font-weight:600;letter-spacing:.05em;' +
+            ((t.btns & 1) ? on : off);
+        uEl.style.cssText = 'display:inline-block;padding:3px 10px;' +
+            'border-radius:4px;font-size:11px;font-weight:600;letter-spacing:.05em;' +
+            ((t.btns & 2) ? on : off);
+    }
+    function setHudHub(hubName) {
+        if (!hudMounted) return;
+        const el = hudDiv.querySelector('#sbHub');
+        if (el) el.textContent = hubName || '--';
+    }
+    function setHudAwaiting(waiting) {
+        if (!hudMounted) return;
+        const el = hudDiv.querySelector('#bleHudAwaiting');
+        if (el) el.style.display = waiting ? 'block' : 'none';
+    }
+    async function telemetryTick() {
+        if (telemetryInFlight) return;
+        if (!state.session) { stopTelemetryPoll(); return; }
+        if (state.uploading || state.connecting) return;
+        telemetryInFlight = true;
+        try {
+            await state.session.send(CMD_TELEMETRY);
+        } catch (e) {
+            // Silent: the 3 s watchdog is the source of truth for link health.
+        } finally {
+            telemetryInFlight = false;
+        }
+    }
+    function startTelemetryPoll(hubName) {
+        stopTelemetryPoll();
+        if (!mountHud()) return;
+        bleConnected = true;
+        setHudHub(hubName);
+        setHudAwaiting(false);
+        setPane('hud');
+        if (state.session) {
+            state.session._onTelemetry = updateHud;
+        }
+        telemetryInterval = setInterval(telemetryTick, TELEMETRY_INTERVAL_MS);
+    }
+    function stopTelemetryPoll() {
+        if (telemetryInterval) {
+            clearInterval(telemetryInterval);
+            telemetryInterval = null;
+        }
+        telemetryInFlight = false;
+        bleConnected = false;
+        if (hudMounted) {
+            setHudAwaiting(true);
+            // Only auto-flip back to Code if the user is currently on the
+            // HUD (which has no fresh data). If they explicitly opened the
+            // Log tab, leave them there.
+            if (activePane === 'hud') setPane('code');
+        }
+    }
+
+    // --- Locale watcher -----------------------------------------------------
+    // Blockly.ScratchMsgs.currentLocale_ changes when the user flips language
+    // in the IDE header. We can't hook that event directly (obfuscated), so
+    // just poll -- one string read every 500 ms is free.
+    let lastLocale = null;
+    function refreshAllLabels() {
+        // HUD tabs
+        if (codeTab) codeTab.textContent = tr(codeTab.dataset.labelKey);
+        if (hudTab)  hudTab.textContent  = tr(hudTab.dataset.labelKey);
+        if (logTab)  logTab.textContent  = tr(logTab.dataset.labelKey);
+        // HUD section + row + awaiting labels (all tagged data-label-key)
+        if (hudDiv) {
+            hudDiv.querySelectorAll('[data-label-key]').forEach(el => {
+                el.textContent = tr(el.dataset.labelKey);
+            });
+        }
+        // Log pane empty-state string
+        if (logDiv) {
+            const empty = logDiv.querySelector('#bleLogEmpty');
+            if (empty) empty.textContent = tr('sbLogEmpty');
+        }
+        // Nav buttons (Connect / Send via BLE)
+        try { updateConnectButton(); } catch (_) {}
+        const sbtn = document.getElementById('bleUploadButton');
+        if (sbtn) sbtn.innerHTML = '&nbsp;' + tr('btnLabel');
+        // Modal labels + status line (safe to call even when modal is closed)
+        try { applyModalLabels(); } catch (_) {}
+        try { updateModal(); } catch (_) {}
+    }
+    function startLocaleWatcher() {
+        lastLocale = locale();
+        setInterval(() => {
+            const cur = locale();
+            if (cur !== lastLocale) {
+                lastLocale = cur;
+                refreshAllLabels();
+            }
+        }, 500);
+    }
+
     function cancel() {
         console.log('[BLE] cancel() invoked, connecting=' + state.connecting +
                     ' uploading=' + state.uploading);
@@ -327,6 +710,7 @@
             this._pending = null;   // { resolve, reject } for the in-flight send
             this._sendChain = null; // serialises overlapping send() calls
             this._onState = null;
+            this._onTelemetry = null;
             this._notifyBound = ev => this._onNotify(ev);
             txChar.addEventListener('characteristicvaluechanged', this._notifyBound);
         }
@@ -348,6 +732,21 @@
                     size:    dv.getUint8(5) | (dv.getUint8(6) << 8),
                 };
                 if (this._onState) this._onState(st);
+            } else if (tag === RSP_TELEMETRY && dv.byteLength >= 16) {
+                // Layout mirrors MiniR4BLERuntimeClass::_sendTelemetry.
+                // int16 fields via getInt16 with littleEndian=true.
+                const t = {
+                    battMv:  dv.getUint16(1, true),
+                    running: dv.getUint8(3),
+                    err:     dv.getUint8(4),
+                    pc:      dv.getUint16(5, true),
+                    size:    dv.getUint16(7, true),
+                    roll:    dv.getInt16(9,  true) / 100,
+                    pitch:   dv.getInt16(11, true) / 100,
+                    yaw:     dv.getInt16(13, true) / 100,
+                    btns:    dv.getUint8(15),
+                };
+                if (this._onTelemetry) this._onTelemetry(t);
             }
         }
         // Public entry point. All sends are strictly serialised -- the R4
@@ -527,6 +926,7 @@
             }
             log(tr('connectedMsg'), 'ok');
             startWatchdog();
+            startTelemetryPoll(state.device && state.device.name);
         } catch (e) {
             if (e instanceof CancelledError) {
                 log(tr('cancelled'));
@@ -547,6 +947,7 @@
     async function disconnect() {
         console.log('[BLE] disconnect() invoked, session=' + !!state.session);
         stopWatchdog();
+        stopTelemetryPoll();
         if (state.device && state.device.gatt && state.device.gatt.connected) {
             try { state.device.gatt.disconnect(); } catch (e) {}
         }
@@ -707,7 +1108,7 @@
               '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">' +
                 '<button id="bleModalCancel" type="button" style="padding:6px 14px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:4px;cursor:pointer;">Cancel</button>' +
                 '<button id="bleModalDisconnect" type="button" style="padding:6px 14px;border:1px solid #64748b;background:#fff;color:#64748b;border-radius:4px;cursor:pointer;">Disconnect</button>' +
-                '<button id="bleModalSearch" type="button" style="padding:6px 14px;border:0;background:#2563eb;color:#fff;border-radius:4px;cursor:pointer;">Search</button>' +
+                '<button id="bleModalSearch" type="button" style="padding:6px 14px;border:0;background:#008184;color:#fff;border-radius:4px;cursor:pointer;">Search</button>' +
               '</div>' +
             '</div>';
         document.body.appendChild(modalEl);
@@ -769,19 +1170,33 @@
         }
     }
 
+    // Rewrite modal labels from the current locale. Factored out so both
+    // openModal() and the locale watcher can call it -- the watcher was the
+    // missing piece; before that a language flip after modal open left the
+    // modal in the boot-time language.
+    function applyModalLabels() {
+        if (!modalEl) return;
+        const set = (id, key) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = tr(key);
+        };
+        set('bleModalTitle',        'modalTitle');
+        set('bleModalNameLabel',    'modalHubName');
+        set('bleModalNameHint',     'modalHubHint');
+        set('bleModalSearch',       'modalSearch');
+        set('bleModalCancel',       'modalCancel');
+        set('bleModalDisconnect',   'disconnect');
+        set('bleModalRenameLabel',  'modalRename');
+        set('bleModalRenameHint',   'modalRenameHint');
+        set('bleModalRenameSave',   'modalRenameSave');
+        const close = document.getElementById('bleModalClose');
+        if (close) close.title = tr('modalClose');
+    }
+
     function openModal() {
         const m = ensureModal();
-        document.getElementById('bleModalTitle').textContent = tr('modalTitle');
-        document.getElementById('bleModalNameLabel').textContent = tr('modalHubName');
-        document.getElementById('bleModalNameHint').textContent = tr('modalHubHint');
-        document.getElementById('bleModalSearch').textContent = tr('modalSearch');
-        document.getElementById('bleModalCancel').textContent = tr('modalCancel');
-        document.getElementById('bleModalDisconnect').textContent = tr('disconnect');
-        document.getElementById('bleModalClose').title = tr('modalClose');
+        applyModalLabels();
         document.getElementById('bleModalName').value = getDeviceName();
-        document.getElementById('bleModalRenameLabel').textContent = tr('modalRename');
-        document.getElementById('bleModalRenameHint').textContent = tr('modalRenameHint');
-        document.getElementById('bleModalRenameSave').textContent = tr('modalRenameSave');
         document.getElementById('bleModalRename').value = getDeviceName();
         m.style.display = 'flex';
         updateModal();
@@ -877,12 +1292,23 @@
             parent.insertBefore(s, connectBtn ? connectBtn.nextSibling : uploadLink.nextSibling);
         }
 
-        // Refresh labels a few times so late locale switches take effect.
+        // Mount the tab-based HUD sidebar so Code/HUD/Log tabs exist even
+        // before the first BLE connect. HUD starts in "awaiting connection"
+        // mode; Log is empty until BLE activity accumulates.
+        if (mountHud()) setHudAwaiting(true);
+
+        // Start the locale watcher exactly once so language flips propagate
+        // through every label (nav buttons, tabs, HUD, modal).
+        if (!window.__bleLocaleWatcherStarted) {
+            window.__bleLocaleWatcherStarted = true;
+            startLocaleWatcher();
+        }
+
+        // Refresh labels a few times so late locale switches take effect
+        // during the IDE's slow-boot phase.
         let tries = 0;
         const iv = setInterval(() => {
-            updateConnectButton();
-            const sbtn = document.getElementById('bleUploadButton');
-            if (sbtn) sbtn.innerHTML = '&nbsp;' + tr('btnLabel');
+            refreshAllLabels();
             if (++tries > 10) clearInterval(iv);
         }, 500);
     }

@@ -43,8 +43,8 @@ constexpr uint32_t TOGGLE_HOLD_MS  = 3000;
 enum : uint8_t {
     CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END   = 0x03,
     CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06,
-    CMD_INFO  = 0x07, CMD_SET_NAME = 0x08,
-    RSP_ACK   = 0xA0, RSP_STATE = 0xA1,
+    CMD_INFO  = 0x07, CMD_SET_NAME = 0x08, CMD_TELEMETRY = 0x09,
+    RSP_ACK   = 0xA0, RSP_STATE = 0xA1, RSP_TELEMETRY = 0xA2,
 };
 
 // storageBuf holds both the on-flash header and the program payload. Keeping
@@ -511,6 +511,34 @@ void MiniR4BLERuntimeClass::_sendState()
     g_txChar.writeValue(buf, 7);
 }
 
+// Telemetry blob for the IDE status panel. Fixed layout so the client can
+// parse by offset. All multi-byte fields little-endian, signed IMU values
+// scaled x100. Extend by APPENDING new fields at the end so older clients
+// keep parsing the prefix they know.
+void MiniR4BLERuntimeClass::_sendTelemetry()
+{
+    const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
+    const uint16_t pc     = _vm.pc();
+    const int16_t  roll   = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Roll)  * 100.0);
+    const int16_t  pitch  = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Pitch) * 100.0);
+    const int16_t  yaw    = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Yaw)   * 100.0);
+    const uint8_t  btns   = (uint8_t)((MiniR4.BTN_DOWN.getState() ? 1 : 0)
+                                    | (MiniR4.BTN_UP.getState()   ? 2 : 0));
+    uint8_t buf[16] = {
+        RSP_TELEMETRY,
+        (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
+        (uint8_t)(_vm.isRunning() ? 1 : 0),
+        (uint8_t)_vm.lastError(),
+        (uint8_t)(pc & 0xFF), (uint8_t)((pc >> 8) & 0xFF),
+        (uint8_t)(_programSize & 0xFF), (uint8_t)((_programSize >> 8) & 0xFF),
+        (uint8_t)(roll & 0xFF),  (uint8_t)((roll  >> 8) & 0xFF),
+        (uint8_t)(pitch & 0xFF), (uint8_t)((pitch >> 8) & 0xFF),
+        (uint8_t)(yaw & 0xFF),   (uint8_t)((yaw   >> 8) & 0xFF),
+        btns,
+    };
+    g_txChar.writeValue(buf, sizeof(buf));
+}
+
 // --- Command handler --------------------------------------------------------
 
 void MiniR4BLERuntimeClass::_onRxWriteImpl(const uint8_t* data, int len)
@@ -571,6 +599,11 @@ void MiniR4BLERuntimeClass::_onRxWriteImpl(const uint8_t* data, int len)
         case CMD_INFO:
             _sendAck(cmd, 0);
             _sendState();
+            break;
+
+        case CMD_TELEMETRY:
+            _sendAck(cmd, 0);
+            _sendTelemetry();
             break;
 
         case CMD_SET_NAME: {
