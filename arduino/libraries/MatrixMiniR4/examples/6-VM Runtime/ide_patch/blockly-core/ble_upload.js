@@ -89,6 +89,16 @@
             sbLogEmpty:     'No BLE activity yet. Connect to a hub to start.',
             sbAwaitingConn: 'Waiting for a BLE connection...',
             sbUptime:       'Uptime',
+            // --- Sub-tabs + Ports (phase 3a) ---
+            sbSubTabState:  'State',
+            sbSubTabPorts:  'Ports',
+            sbSectionMotors:'Motors',
+            sbSectionAnalog:'Analog',
+            sbSectionDigital:'Digital pins',
+            sbEncoder:      'enc',
+            sbSpeed:        'deg/s',
+            sbAnalogUnit:   'V',
+            sbPortsHint:    'Values here reflect what the hub can read now. Set pinMode / connect sensors from your program; readouts follow.',
         },
         'pt-BR': {
             connect:        'Conectar',
@@ -163,6 +173,15 @@
             sbLogEmpty:     'Nenhuma atividade BLE ainda. Conecte-se a um hub para comecar.',
             sbAwaitingConn: 'Aguardando conexao BLE...',
             sbUptime:       'Tempo ligado',
+            sbSubTabState:  'Estado',
+            sbSubTabPorts:  'Portas',
+            sbSectionMotors:'Motores',
+            sbSectionAnalog:'Analogicos',
+            sbSectionDigital:'Pinos digitais',
+            sbEncoder:      'enc',
+            sbSpeed:        'graus/s',
+            sbAnalogUnit:   'V',
+            sbPortsHint:    'Os valores refletem o que o hub consegue ler agora. Configure pinMode / plugue sensores pelo programa; as leituras seguem.',
         },
     };
     function locale() {
@@ -426,6 +445,8 @@
 
         hudMounted = true;
         wireCollapsibles();
+        wireSubTabs();
+        setSubTab(loadSubTab());   // restore last sub-tab (state|ports)
         // Backfill any log lines emitted before mount.
         for (let i = 0; i < logBuffer.length; i++) appendLogLine(logBuffer[i]);
         setPane('code');   // start on Code; connect() flips to HUD
@@ -561,13 +582,64 @@
               '<div id="' + valueId + '" style="font-weight:700;font-size:16px;' +
                 'color:#222;font-variant-numeric:tabular-nums;">--</div>' +
             '</div>';
-        return (
-            '<div id="bleHudAwaiting" style="display:none;color:#9b9b9b;' +
-              'font-style:italic;padding:6px 0 14px 0;" data-label-key="sbAwaitingConn">' +
-              tr('sbAwaitingConn') + '</div>' +
+        // Sub-tab bar for Estado / Portas. Underline-style toggle -- lighter
+        // than the top-level Code/HUD/Log tabs so the visual hierarchy stays
+        // main-tabs > sub-tabs > sections.
+        const subTab = (id, key) =>
+            '<button id="' + id + '" type="button" data-label-key="' + key + '" ' +
+              'class="ble-hud-subtab" style="flex:1;background:transparent;border:0;' +
+              'border-bottom:2px solid transparent;padding:6px 8px;' +
+              'font:600 12px/1.2 -apple-system,Segoe UI,sans-serif;' +
+              'color:#666;cursor:pointer;letter-spacing:.03em;">' + tr(key) + '</button>';
+
+        // "Ports" sub-pane content: 3 collapsible sections
+        const motorCell = (n) =>
+            '<div style="text-align:center;">' +
+              '<div style="color:#9b9b9b;font-size:10px;text-transform:uppercase;' +
+                'letter-spacing:.05em;">M' + n + '</div>' +
+              '<div id="sbM' + n + 'Deg" style="font-weight:700;font-size:15px;' +
+                'color:#222;font-variant-numeric:tabular-nums;">--</div>' +
+              '<div id="sbM' + n + 'Spd" style="color:#9b9b9b;font-size:10px;' +
+                'font-variant-numeric:tabular-nums;">--</div>' +
+            '</div>';
+        const analogCell = (n) =>
+            '<div style="text-align:center;">' +
+              '<div style="color:#9b9b9b;font-size:10px;text-transform:uppercase;' +
+                'letter-spacing:.05em;">A' + n + '</div>' +
+              '<div id="sbA' + n + 'Raw" style="font-weight:700;font-size:14px;' +
+                'color:#222;font-variant-numeric:tabular-nums;">--</div>' +
+              '<div id="sbA' + n + 'Volt" style="color:#9b9b9b;font-size:10px;' +
+                'font-variant-numeric:tabular-nums;">--</div>' +
+            '</div>';
+        const digitalCell = (p) =>
+            '<div id="sbD' + p + '" style="text-align:center;padding:4px 0;' +
+              'border-radius:4px;background:#f1f1f1;color:#9b9b9b;' +
+              'font-size:10px;font-weight:700;letter-spacing:.04em;">' +
+              'D' + p + '</div>';
+        const portsPane =
+            section('sbSecMotors', 'sbSectionMotors',
+                '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' +
+                  motorCell(1) + motorCell(2) + motorCell(3) + motorCell(4) +
+                '</div>') +
+            section('sbSecAnalog', 'sbSectionAnalog',
+                '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">' +
+                  analogCell(0) + analogCell(1) + analogCell(2) +
+                  analogCell(3) + analogCell(4) + analogCell(5) +
+                '</div>') +
+            section('sbSecDigital', 'sbSectionDigital',
+                '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;">' +
+                  // Matrix D-port physical pins: 2/3 (D1), 4/5 (D2), 10/11..13 (D3/D4)
+                  digitalCell(2)  + digitalCell(3)  + digitalCell(4)  + digitalCell(5)  +
+                  digitalCell(10) + digitalCell(11) + digitalCell(12) + digitalCell(13) +
+                '</div>' +
+                '<div data-label-key="sbPortsHint" style="color:#9b9b9b;' +
+                  'font-size:10px;font-style:italic;margin-top:8px;">' +
+                  tr('sbPortsHint') + '</div>');
+
+        // "Estado" sub-pane = the original phase 1/2 sections.
+        const statePane =
             section('sbSecConn', 'sbSectionConn',
                 row('sbHub',     'sbHub') +
-                // Battery: numeric row PLUS a bar that fills based on voltage.
                 row('sbBattery', 'sbBatt') +
                 '<div style="height:6px;background:#f1f1f1;border-radius:3px;' +
                   'margin:4px 0 4px 0;overflow:hidden;">' +
@@ -591,8 +663,60 @@
                   '<span id="sbBtnUp"   style="display:inline-block;padding:3px 10px;' +
                     'border-radius:4px;background:#f1f1f1;color:#9b9b9b;' +
                     'font-size:11px;font-weight:600;letter-spacing:.05em;">UP</span>' +
-                '</div>')
+                '</div>');
+
+        return (
+            '<div id="bleHudAwaiting" style="display:none;color:#9b9b9b;' +
+              'font-style:italic;padding:6px 0 10px 0;" data-label-key="sbAwaitingConn">' +
+              tr('sbAwaitingConn') + '</div>' +
+            '<div id="bleHudSubTabs" style="display:flex;gap:0;margin-bottom:10px;' +
+              'border-bottom:1px solid #eee;">' +
+              subTab('bleHudSubTabState', 'sbSubTabState') +
+              subTab('bleHudSubTabPorts', 'sbSubTabPorts') +
+            '</div>' +
+            '<div id="bleHudSubPaneState">' + statePane + '</div>' +
+            '<div id="bleHudSubPanePorts" style="display:none;">' + portsPane + '</div>'
         );
+    }
+
+    // Sub-tab state (persists across sessions). Default: 'state'.
+    const MATRIX_HUD_SUBTAB_KEY = 'matrix-hud-subtab';
+    function loadSubTab() {
+        try {
+            const v = window.localStorage.getItem(MATRIX_HUD_SUBTAB_KEY);
+            return (v === 'ports') ? 'ports' : 'state';
+        } catch (_) { return 'state'; }
+    }
+    function saveSubTab(name) {
+        try { window.localStorage.setItem(MATRIX_HUD_SUBTAB_KEY, name); } catch (_) {}
+    }
+    function setSubTab(name) {
+        if (!hudDiv) return;
+        const stateBtn = hudDiv.querySelector('#bleHudSubTabState');
+        const portsBtn = hudDiv.querySelector('#bleHudSubTabPorts');
+        const statePane = hudDiv.querySelector('#bleHudSubPaneState');
+        const portsPane = hudDiv.querySelector('#bleHudSubPanePorts');
+        if (!stateBtn || !portsBtn) return;
+        const isPorts = (name === 'ports');
+        statePane.style.display = isPorts ? 'none' : '';
+        portsPane.style.display = isPorts ? '' : 'none';
+        const active = 'color:' + BRAND_TEAL + ';border-bottom-color:' + BRAND_TEAL + ';';
+        const idle   = 'color:#666;border-bottom-color:transparent;';
+        stateBtn.style.cssText = stateBtn.style.cssText
+            .replace(/color:[^;]+;/g, '').replace(/border-bottom-color:[^;]+;/g, '') +
+            (isPorts ? idle : active);
+        portsBtn.style.cssText = portsBtn.style.cssText
+            .replace(/color:[^;]+;/g, '').replace(/border-bottom-color:[^;]+;/g, '') +
+            (isPorts ? active : idle);
+        saveSubTab(name);
+    }
+    function wireSubTabs() {
+        if (!hudDiv) return;
+        hudDiv.addEventListener('click', (ev) => {
+            const b = ev.target.closest('#bleHudSubTabState, #bleHudSubTabPorts');
+            if (!b) return;
+            setSubTab(b.id === 'bleHudSubTabPorts' ? 'ports' : 'state');
+        });
     }
 
     // Attach one delegated click handler once the HUD is mounted. Cheaper
@@ -708,7 +832,50 @@
         uEl.style.cssText = 'display:inline-block;padding:3px 10px;' +
             'border-radius:4px;font-size:11px;font-weight:600;letter-spacing:.05em;' +
             ((t.btns & 2) ? on : off);
+
+        // --- Ports sub-pane (motors + analog + digital) ---
+        if (t.motorDeg) {
+            const now = performance.now();
+            const dt  = (lastMotorTs > 0) ? (now - lastMotorTs) / 1000 : 0;
+            for (let i = 0; i < 4; i++) {
+                $('sbM' + (i + 1) + 'Deg').textContent = t.motorDeg[i] + '°';
+                if (dt > 0 && lastMotorDeg[i] != null) {
+                    const spd = (t.motorDeg[i] - lastMotorDeg[i]) / dt;
+                    $('sbM' + (i + 1) + 'Spd').textContent =
+                        spd.toFixed(0) + ' ' + tr('sbSpeed');
+                } else {
+                    $('sbM' + (i + 1) + 'Spd').textContent = '';
+                }
+                lastMotorDeg[i] = t.motorDeg[i];
+            }
+            lastMotorTs = now;
+        }
+        if (t.analog) {
+            for (let i = 0; i < 6; i++) {
+                $('sbA' + i + 'Raw').textContent  = t.analog[i];
+                // Arduino ADC ref is 5V (default) -> raw/1023 * 5.0.
+                const v = (t.analog[i] / 1023 * 5.0).toFixed(2);
+                $('sbA' + i + 'Volt').textContent = v + ' ' + tr('sbAnalogUnit');
+            }
+        }
+        if (t.digitalBits != null) {
+            const highStyle = 'text-align:center;padding:4px 0;border-radius:4px;' +
+                'background:' + BRAND_AMBER + ';color:#333;' +
+                'font-size:10px;font-weight:700;letter-spacing:.04em;';
+            const lowStyle  = 'text-align:center;padding:4px 0;border-radius:4px;' +
+                'background:#f1f1f1;color:#9b9b9b;' +
+                'font-size:10px;font-weight:700;letter-spacing:.04em;';
+            const pins = [2, 3, 4, 5, 10, 11, 12, 13];
+            for (let i = 0; i < pins.length; i++) {
+                const p = pins[i];
+                const el = $('sbD' + p);
+                if (el) el.style.cssText = ((t.digitalBits >> p) & 1) ? highStyle : lowStyle;
+            }
+        }
     }
+    // Motor speed derivation state (client-side; server ships absolute deg).
+    let lastMotorDeg = [null, null, null, null];
+    let lastMotorTs  = 0;
     function setHudHub(hubName) {
         if (!hudMounted) return;
         const el = hudDiv.querySelector('#sbHub');
@@ -870,6 +1037,20 @@
                 };
                 if (dv.byteLength >= 20) {
                     t.upSecs = dv.getUint32(16, true);
+                }
+                if (dv.byteLength >= 50) {
+                    t.motorDeg = [
+                        dv.getInt32(20, true),
+                        dv.getInt32(24, true),
+                        dv.getInt32(28, true),
+                        dv.getInt32(32, true),
+                    ];
+                    t.analog = [
+                        dv.getUint16(36, true), dv.getUint16(38, true),
+                        dv.getUint16(40, true), dv.getUint16(42, true),
+                        dv.getUint16(44, true), dv.getUint16(46, true),
+                    ];
+                    t.digitalBits = dv.getUint16(48, true);
                 }
                 if (this._onTelemetry) this._onTelemetry(t);
             }

@@ -517,11 +517,16 @@ void MiniR4BLERuntimeClass::_sendState()
 // keep parsing the prefix they know.
 void MiniR4BLERuntimeClass::_sendTelemetry()
 {
-    // Layout: offsets 0..15 are the phase 1 prefix. Phase 2 first tried
-    // appending accel (6) + gyro (6) + uptime (4) but the user dropped the
-    // motion fields (not useful for their debug loop) so uptime now sits
-    // directly at offset 16. Total 20 bytes. Format is still APPEND-ONLY
-    // for any future field we add.
+    // Layout (APPEND-ONLY so older clients keep parsing what they know):
+    //   offset  0     RSP_TELEMETRY tag
+    //   offset  1..15 phase 1 prefix (batt, VM state, IMU euler, buttons)
+    //   offset 16..19 uptime seconds (uint32 LE)          -- phase 2
+    //   offset 20..35 motor encoders M1..M4 (4 x int32 LE) -- phase 3a
+    //   offset 36..47 analog A0..A5 (6 x uint16 LE)        -- phase 3a
+    //   offset 48..49 digital pin bitfield (uint16 LE)     -- phase 3a
+    //                 bit n = digitalRead(n); Matrix D-port pins are 2,3
+    //                 (D1), 4,5 (D2), 11,12 (D3), 10,13 (D4).
+    // Total: 50 bytes.
     const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
     const uint16_t pc     = _vm.pc();
     const int16_t  roll   = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Roll)  * 100.0);
@@ -530,8 +535,28 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     const uint8_t  btns   = (uint8_t)((MiniR4.BTN_DOWN.getState() ? 1 : 0)
                                     | (MiniR4.BTN_UP.getState()   ? 2 : 0));
     const uint32_t upSecs = (uint32_t)(millis() / 1000UL);
+    const int32_t  m1     = (int32_t)MiniR4.M1.getDegrees();
+    const int32_t  m2     = (int32_t)MiniR4.M2.getDegrees();
+    const int32_t  m3     = (int32_t)MiniR4.M3.getDegrees();
+    const int32_t  m4     = (int32_t)MiniR4.M4.getDegrees();
+    // analogRead returns 0..1023 on Arduino; safe to poll regardless of
+    // pin mode (no side effects on user code that has the pin as OUTPUT).
+    const uint16_t a0 = (uint16_t)analogRead(A0);
+    const uint16_t a1 = (uint16_t)analogRead(A1);
+    const uint16_t a2 = (uint16_t)analogRead(A2);
+    const uint16_t a3 = (uint16_t)analogRead(A3);
+    const uint16_t a4 = (uint16_t)analogRead(A4);
+    const uint16_t a5 = (uint16_t)analogRead(A5);
+    // Only sample pins the Matrix D-ports expose (2,3,4,5,10,11,12,13).
+    // Skipping 0/1 (UART) and 6..9 (unused on Matrix headers) keeps the
+    // bitfield honest and avoids reading pins whose state may be random.
+    uint16_t dbits = 0;
+    const uint8_t pins[8] = {2, 3, 4, 5, 10, 11, 12, 13};
+    for (uint8_t i = 0; i < 8; ++i) {
+        if (digitalRead(pins[i])) dbits |= (uint16_t)(1u << pins[i]);
+    }
 
-    uint8_t buf[20] = {
+    uint8_t buf[50] = {
         RSP_TELEMETRY,
         (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
         (uint8_t)(_vm.isRunning() ? 1 : 0),
@@ -544,6 +569,20 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         btns,
         (uint8_t)(upSecs & 0xFF),         (uint8_t)((upSecs >> 8)  & 0xFF),
         (uint8_t)((upSecs >> 16) & 0xFF), (uint8_t)((upSecs >> 24) & 0xFF),
+        // --- phase 3a: motors ---
+        (uint8_t)(m1 & 0xFF), (uint8_t)((m1 >> 8) & 0xFF), (uint8_t)((m1 >> 16) & 0xFF), (uint8_t)((m1 >> 24) & 0xFF),
+        (uint8_t)(m2 & 0xFF), (uint8_t)((m2 >> 8) & 0xFF), (uint8_t)((m2 >> 16) & 0xFF), (uint8_t)((m2 >> 24) & 0xFF),
+        (uint8_t)(m3 & 0xFF), (uint8_t)((m3 >> 8) & 0xFF), (uint8_t)((m3 >> 16) & 0xFF), (uint8_t)((m3 >> 24) & 0xFF),
+        (uint8_t)(m4 & 0xFF), (uint8_t)((m4 >> 8) & 0xFF), (uint8_t)((m4 >> 16) & 0xFF), (uint8_t)((m4 >> 24) & 0xFF),
+        // --- phase 3a: analog ---
+        (uint8_t)(a0 & 0xFF), (uint8_t)((a0 >> 8) & 0xFF),
+        (uint8_t)(a1 & 0xFF), (uint8_t)((a1 >> 8) & 0xFF),
+        (uint8_t)(a2 & 0xFF), (uint8_t)((a2 >> 8) & 0xFF),
+        (uint8_t)(a3 & 0xFF), (uint8_t)((a3 >> 8) & 0xFF),
+        (uint8_t)(a4 & 0xFF), (uint8_t)((a4 >> 8) & 0xFF),
+        (uint8_t)(a5 & 0xFF), (uint8_t)((a5 >> 8) & 0xFF),
+        // --- phase 3a: digital pin bitfield ---
+        (uint8_t)(dbits & 0xFF), (uint8_t)((dbits >> 8) & 0xFF),
     };
     g_txChar.writeValue(buf, sizeof(buf));
 }
