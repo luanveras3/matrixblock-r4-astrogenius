@@ -88,6 +88,7 @@
             hudTabLog:      'Log',
             sbLogEmpty:     'No BLE activity yet. Connect to a hub to start.',
             sbAwaitingConn: 'Waiting for a BLE connection...',
+            sbUptime:       'Uptime',
         },
         'pt-BR': {
             connect:        'Conectar',
@@ -161,6 +162,7 @@
             hudTabLog:      'Log',
             sbLogEmpty:     'Nenhuma atividade BLE ainda. Conecte-se a um hub para comecar.',
             sbAwaitingConn: 'Aguardando conexao BLE...',
+            sbUptime:       'Tempo ligado',
         },
     };
     function locale() {
@@ -405,7 +407,14 @@
         codeDiv.parentNode.insertBefore(hudDiv, codeDiv.nextSibling);
         codeDiv.parentNode.insertBefore(logDiv, hudDiv.nextSibling);
 
+        // The IDE's default sizing has .code-Div (60%) + .console-Div (40%)
+        // filling .control-Div (100%). Adding our tab bar (~30 px) on top
+        // used to overflow the parent by that much and push the console's
+        // bottom controls off-screen. Steal that height from .code-Div so
+        // 30 px tab + calc(60% - 30 px) code + 40% console = 100% again.
         function syncHeight() {
+            const barH = tabBar.getBoundingClientRect().height || 30;
+            codeDiv.style.height = 'calc(60% - ' + barH + 'px)';
             const h = codeDiv.getBoundingClientRect().height;
             if (h > 0) {
                 hudDiv.style.height = h + 'px';
@@ -416,6 +425,7 @@
         window.addEventListener('resize', syncHeight);
 
         hudMounted = true;
+        wireCollapsibles();
         // Backfill any log lines emitted before mount.
         for (let i = 0; i < logBuffer.length; i++) appendLogLine(logBuffer[i]);
         setPane('code');   // start on Code; connect() flips to HUD
@@ -476,6 +486,8 @@
                 }
             } catch (_) {}
         } else {
+            // Sync non-code panes to whatever .code-Div ended up at (its
+            // height is now calc(60% - tabBarH) so panes match it exactly).
             const h = codeDiv.getBoundingClientRect().height;
             if (h > 0) {
                 hudDiv.style.height = h + 'px';
@@ -488,27 +500,65 @@
         }
     }
 
+    // Collapsible sections. Each has a chevron header (button) that flips a
+    // body's display + saves the collapsed state under localStorage key
+    // MATRIX_HUD_COLLAPSED_KEY so the user's preferences survive reloads.
+    const MATRIX_HUD_COLLAPSED_KEY = 'matrix-hud-collapsed';
+    function loadCollapsed() {
+        try {
+            const raw = window.localStorage.getItem(MATRIX_HUD_COLLAPSED_KEY);
+            return raw ? (JSON.parse(raw) || {}) : {};
+        } catch (_) { return {}; }
+    }
+    function saveCollapsed(map) {
+        try { window.localStorage.setItem(MATRIX_HUD_COLLAPSED_KEY, JSON.stringify(map)); }
+        catch (_) {}
+    }
+
     function hudHtml() {
-        const section = (id, labelKey, bodyHtml) =>
-            '<div style="margin-bottom:14px;">' +
-              '<div id="' + id + 'Lbl" data-label-key="' + labelKey + '" ' +
-                'style="color:' + BRAND_TEAL + ';font-size:10px;' +
-                'text-transform:uppercase;letter-spacing:.06em;' +
-                'margin-bottom:6px;font-weight:700;">' + tr(labelKey) + '</div>' +
-              bodyHtml +
-            '</div>';
+        const collapsed = loadCollapsed();
+        // A collapsible <section id> with <header> (chevron + i18n label) and
+        // <body>. Header is a real <button> so keyboard toggle works.
+        const section = (id, labelKey, bodyHtml) => {
+            const isColl = !!collapsed[id];
+            return (
+              '<div class="ble-hud-section" data-section-id="' + id + '" ' +
+                'style="margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:8px;">' +
+                '<button type="button" class="ble-hud-section-header" ' +
+                  'data-section-id="' + id + '" ' +
+                  'style="width:100%;background:transparent;border:0;padding:4px 0;' +
+                    'cursor:pointer;display:flex;align-items:center;gap:8px;' +
+                    'color:' + BRAND_TEAL + ';font-size:11px;font-weight:700;' +
+                    'text-transform:uppercase;letter-spacing:.06em;' +
+                    'text-align:left;font-family:inherit;">' +
+                  '<span class="ble-hud-chevron" style="display:inline-block;width:10px;' +
+                    'transition:transform .15s ease;transform:rotate(' +
+                    (isColl ? '-90' : '0') + 'deg);">&#9662;</span>' +
+                  '<span data-label-key="' + labelKey + '">' + tr(labelKey) + '</span>' +
+                '</button>' +
+                '<div class="ble-hud-section-body" ' +
+                  'style="padding:4px 0 2px 0;display:' + (isColl ? 'none' : 'block') + ';">' +
+                  bodyHtml +
+                '</div>' +
+              '</div>');
+        };
         const row = (labelKey, valueId) =>
             '<div style="display:flex;justify-content:space-between;padding:2px 0;">' +
               '<span data-label-key="' + labelKey + '" style="color:#4a4a4a;">' +
                 tr(labelKey) + '</span>' +
-              '<span id="' + valueId + '" style="color:#222;font-weight:600;">--</span>' +
+              '<span id="' + valueId + '" style="color:#222;font-weight:600;' +
+                'font-variant-numeric:tabular-nums;">--</span>' +
             '</div>';
-        const imuCell = (labelKey, valueId) =>
+        // 3-col grid for axis triplets (IMU / Accel / Gyro).
+        const axisGrid = (cells) =>
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">' +
+              cells + '</div>';
+        const axisCell = (labelKey, valueId) =>
             '<div style="text-align:center;">' +
               '<div data-label-key="' + labelKey + '" style="color:#9b9b9b;' +
                 'font-size:10px;text-transform:uppercase;letter-spacing:.05em;">' +
                 tr(labelKey) + '</div>' +
-              '<div id="' + valueId + '" style="font-weight:700;font-size:18px;' +
+              '<div id="' + valueId + '" style="font-weight:700;font-size:16px;' +
                 'color:#222;font-variant-numeric:tabular-nums;">--</div>' +
             '</div>';
         return (
@@ -517,16 +567,22 @@
               tr('sbAwaitingConn') + '</div>' +
             section('sbSecConn', 'sbSectionConn',
                 row('sbHub',     'sbHub') +
-                row('sbBattery', 'sbBatt')) +
+                // Battery: numeric row PLUS a bar that fills based on voltage.
+                row('sbBattery', 'sbBatt') +
+                '<div style="height:6px;background:#f1f1f1;border-radius:3px;' +
+                  'margin:4px 0 4px 0;overflow:hidden;">' +
+                  '<div id="sbBattBar" style="height:100%;width:0%;background:' +
+                    BRAND_TEAL + ';transition:width .3s,background .3s;"></div>' +
+                '</div>' +
+                row('sbUptime',  'sbUptime')) +
             section('sbSecVm',   'sbSectionVm',
                 row('sbVmState', 'sbVmState') +
                 '<div id="sbVmDetail" style="color:#9b9b9b;font-size:11px;margin-top:2px;"></div>') +
             section('sbSecImu',  'sbSectionImu',
-                '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">' +
-                  imuCell('sbImuRoll',  'sbImuRollVal') +
-                  imuCell('sbImuPitch', 'sbImuPitchVal') +
-                  imuCell('sbImuYaw',   'sbImuYawVal') +
-                '</div>') +
+                axisGrid(
+                    axisCell('sbImuRoll',  'sbImuRollVal') +
+                    axisCell('sbImuPitch', 'sbImuPitchVal') +
+                    axisCell('sbImuYaw',   'sbImuYawVal'))) +
             section('sbSecBtn',  'sbButtons',
                 '<div>' +
                   '<span id="sbBtnDown" style="display:inline-block;padding:3px 10px;' +
@@ -537,6 +593,35 @@
                     'font-size:11px;font-weight:600;letter-spacing:.05em;">UP</span>' +
                 '</div>')
         );
+    }
+
+    // Attach one delegated click handler once the HUD is mounted. Cheaper
+    // than one listener per section and it survives future reflows if we
+    // ever re-render hudHtml() (e.g. locale-change refactor).
+    function wireCollapsibles() {
+        if (!hudDiv) return;
+        hudDiv.addEventListener('click', (ev) => {
+            const hdr = ev.target.closest('.ble-hud-section-header');
+            if (!hdr) return;
+            const id = hdr.dataset.sectionId;
+            const section = hudDiv.querySelector(
+                '.ble-hud-section[data-section-id="' + id + '"]');
+            if (!section) return;
+            const body = section.querySelector('.ble-hud-section-body');
+            const chev = hdr.querySelector('.ble-hud-chevron');
+            const map = loadCollapsed();
+            const isColl = body.style.display === 'none';
+            if (isColl) {
+                body.style.display = 'block';
+                chev.style.transform = 'rotate(0deg)';
+                delete map[id];
+            } else {
+                body.style.display = 'none';
+                chev.style.transform = 'rotate(-90deg)';
+                map[id] = true;
+            }
+            saveCollapsed(map);
+        });
     }
 
     function appendLogLine(entry) {
@@ -557,14 +642,41 @@
         if (activePane === 'log') logDiv.scrollTop = logDiv.scrollHeight;
     }
 
+    // Format a duration in whole seconds as "1h 23m 45s" (drops leading
+    // zero units so short runs stay compact: "42s", "3m 12s").
+    function fmtUptime(s) {
+        s = Math.max(0, s | 0);
+        const h = Math.floor(s / 3600); s -= h * 3600;
+        const m = Math.floor(s / 60);   s -= m * 60;
+        if (h > 0) return h + 'h ' + m + 'm ' + s + 's';
+        if (m > 0) return m + 'm ' + s + 's';
+        return s + 's';
+    }
+
     function updateHud(t) {
         if (!hudMounted || !hudDiv) return;
         const $ = id => hudDiv.querySelector('#' + id);
+
+        // --- Connection ---
         const volts = (t.battMv / 100).toFixed(2);
         const battEl = $('sbBatt');
         battEl.textContent = volts + ' V';
-        battEl.style.color = (t.battMv < 1100) ? '#c62828'
-                           : (t.battMv < 1150) ? '#ef6c00' : BRAND_TEAL;
+        const battColor = (t.battMv < 1100) ? '#c62828'
+                        : (t.battMv < 1150) ? '#ef6c00' : BRAND_TEAL;
+        battEl.style.color = battColor;
+        // Battery bar: map 10.0V..13.0V (typical Li-ion 3S span) to 0..100%.
+        // Clamp for edge cases so the bar never overflows the track.
+        const pct = Math.max(0, Math.min(100,
+            ((t.battMv - 1000) / (1300 - 1000)) * 100));
+        const bar = $('sbBattBar');
+        if (bar) {
+            bar.style.width = pct.toFixed(1) + '%';
+            bar.style.background = battColor;
+        }
+        const upEl = $('sbUptime');
+        if (upEl) upEl.textContent = (t.upSecs != null) ? fmtUptime(t.upSecs) : '--';
+
+        // --- Program (VM) ---
         const stateEl = $('sbVmState');
         if (t.err) {
             stateEl.textContent = tr('sbVmError').replace('%d', t.err);
@@ -580,9 +692,13 @@
         if (t.size) detail.push(tr('sbVmSize').replace('%d', t.size));
         if (t.running) detail.push(tr('sbVmPc').replace('%d', t.pc));
         $('sbVmDetail').textContent = detail.join(' - ');
+
+        // --- IMU (Euler) ---
         $('sbImuRollVal').textContent  = t.roll.toFixed(1);
         $('sbImuPitchVal').textContent = t.pitch.toFixed(1);
         $('sbImuYawVal').textContent   = t.yaw.toFixed(1);
+
+        // --- Buttons ---
         const dEl = $('sbBtnDown'), uEl = $('sbBtnUp');
         const on  = 'background:' + BRAND_AMBER + ';color:#333;';
         const off = 'background:#f1f1f1;color:#9b9b9b;';
@@ -607,6 +723,11 @@
         if (telemetryInFlight) return;
         if (!state.session) { stopTelemetryPoll(); return; }
         if (state.uploading || state.connecting) return;
+        // Bandwidth optimization: if the user isn't looking at the HUD, don't
+        // even ask the R4 for telemetry. Zero radio traffic + zero I2C reads
+        // on the hub side. Poll resumes on the next 200 ms tick when the
+        // user flips back to the HUD tab.
+        if (activePane !== 'hud') return;
         telemetryInFlight = true;
         try {
             await state.session.send(CMD_TELEMETRY);
@@ -734,7 +855,8 @@
                 if (this._onState) this._onState(st);
             } else if (tag === RSP_TELEMETRY && dv.byteLength >= 16) {
                 // Layout mirrors MiniR4BLERuntimeClass::_sendTelemetry.
-                // int16 fields via getInt16 with littleEndian=true.
+                // Bytes 0..15 = phase 1 prefix. Byte 16..19 = uptime (uint32
+                // little-endian). Older 16-byte firmwares just skip uptime.
                 const t = {
                     battMv:  dv.getUint16(1, true),
                     running: dv.getUint8(3),
@@ -746,6 +868,9 @@
                     yaw:     dv.getInt16(13, true) / 100,
                     btns:    dv.getUint8(15),
                 };
+                if (dv.byteLength >= 20) {
+                    t.upSecs = dv.getUint32(16, true);
+                }
                 if (this._onTelemetry) this._onTelemetry(t);
             }
         }

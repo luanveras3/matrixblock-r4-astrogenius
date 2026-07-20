@@ -517,6 +517,11 @@ void MiniR4BLERuntimeClass::_sendState()
 // keep parsing the prefix they know.
 void MiniR4BLERuntimeClass::_sendTelemetry()
 {
+    // Layout: offsets 0..15 are the phase 1 prefix. Phase 2 first tried
+    // appending accel (6) + gyro (6) + uptime (4) but the user dropped the
+    // motion fields (not useful for their debug loop) so uptime now sits
+    // directly at offset 16. Total 20 bytes. Format is still APPEND-ONLY
+    // for any future field we add.
     const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
     const uint16_t pc     = _vm.pc();
     const int16_t  roll   = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Roll)  * 100.0);
@@ -524,7 +529,9 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     const int16_t  yaw    = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Yaw)   * 100.0);
     const uint8_t  btns   = (uint8_t)((MiniR4.BTN_DOWN.getState() ? 1 : 0)
                                     | (MiniR4.BTN_UP.getState()   ? 2 : 0));
-    uint8_t buf[16] = {
+    const uint32_t upSecs = (uint32_t)(millis() / 1000UL);
+
+    uint8_t buf[20] = {
         RSP_TELEMETRY,
         (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
         (uint8_t)(_vm.isRunning() ? 1 : 0),
@@ -535,6 +542,8 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         (uint8_t)(pitch & 0xFF), (uint8_t)((pitch >> 8) & 0xFF),
         (uint8_t)(yaw & 0xFF),   (uint8_t)((yaw   >> 8) & 0xFF),
         btns,
+        (uint8_t)(upSecs & 0xFF),         (uint8_t)((upSecs >> 8)  & 0xFF),
+        (uint8_t)((upSecs >> 16) & 0xFF), (uint8_t)((upSecs >> 24) & 0xFF),
     };
     g_txChar.writeValue(buf, sizeof(buf));
 }
