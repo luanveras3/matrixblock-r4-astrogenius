@@ -261,6 +261,7 @@
     const CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END = 0x03;
     const CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06;
     const CMD_INFO  = 0x07, CMD_SET_NAME = 0x08, CMD_TELEMETRY = 0x09;
+    const CMD_ENABLE_DHT = 0x0A;
     const RSP_ACK   = 0xA0, RSP_STATE = 0xA1, RSP_TELEMETRY = 0xA2;
     const TELEMETRY_INTERVAL_MS = 200;   // 5 Hz sidebar refresh
 
@@ -714,12 +715,38 @@
                 'style="text-align:center;color:#9b9b9b;font-size:9px;' +
                 'margin-top:3px;font-variant-numeric:tabular-nums;">&nbsp;</div>' +
             '</div>';
+        // DHT body: temp + humidity. Larger readouts than switch/PIR because
+        // DHT gives two values. "Sem sensor" line surfaces the firmware's
+        // FAILED flag (sentinel 0x7F/0xFF) so the student can tell "sensor
+        // is missing" from "sensor is at 0 C". Firmware only polls when the
+        // client sends CMD_ENABLE_DHT with the port's bit set -- which we
+        // do lazily from the picker change handler.
+        const dhtBody = (portName) =>
+            '<div id="sbBody-' + portName + '-dht" class="port-body" style="display:none;">' +
+              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">' +
+                '<div style="text-align:center;">' +
+                  '<div style="color:#9b9b9b;font-size:9px;text-transform:uppercase;' +
+                    'letter-spacing:.05em;">temp</div>' +
+                  '<div id="sbDhtTemp-' + portName + '" style="font-weight:800;' +
+                    'font-size:16px;color:#222;font-variant-numeric:tabular-nums;">--</div>' +
+                '</div>' +
+                '<div style="text-align:center;">' +
+                  '<div style="color:#9b9b9b;font-size:9px;text-transform:uppercase;' +
+                    'letter-spacing:.05em;">umid</div>' +
+                  '<div id="sbDhtHum-' + portName + '" style="font-weight:800;' +
+                    'font-size:16px;color:#222;font-variant-numeric:tabular-nums;">--</div>' +
+                '</div>' +
+              '</div>' +
+              '<div id="sbDhtHint-' + portName + '" style="text-align:center;' +
+                'color:#9b9b9b;font-size:9px;margin-top:3px;">pino L</div>' +
+            '</div>';
         const digitalPortCard = (portName, leftPin, rightPin) =>
             '<div style="border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;">' +
-              portHeader(portName, ['raw', 'switch', 'pir']) +
+              portHeader(portName, ['raw', 'switch', 'pir', 'dht']) +
               rawDigitalBody(portName, leftPin, rightPin) +
               sensorBody(portName, 'switch') +
               sensorBody(portName, 'pir') +
+              dhtBody(portName) +
             '</div>';
         const rawAnalogBody = (portName, leftPin, rightPin) =>
             '<div id="sbBody-' + portName + '-raw" class="port-body">' +
@@ -994,6 +1021,9 @@
             savePortMode(portName, mode);
             applyPortMode(portName, mode);
             refreshSideToggle(portName);
+            // DHT reads are opt-in server-side. Any picker change on a
+            // D-port that toggles the port's DHT bit needs a fresh mask.
+            if (portName.charAt(0) === 'D') sendDhtEnableMask();
         });
         hudDiv.addEventListener('click', (ev) => {
             const btn = ev.target.closest('button.port-side-btn');
@@ -1200,7 +1230,29 @@
                 fillLaser(name, t.laser[i]);
             }
         }
+        // DHT cards. Bytes 54..61 carry 4 x (int8 temp C, uint8 hum %);
+        // 0x7F/0xFF = no reading. Firmware only fills these on ports we
+        // enabled via CMD_ENABLE_DHT (see sendDhtEnableMask below).
+        if (t.dht) {
+            for (let i = 0; i < 4; i++) {
+                const name = 'D' + (i + 1);
+                if (loadPortMode(name) !== 'dht') continue;
+                fillDht(name, t.dht[i]);
+            }
+        }
+    }
 
+    // Compute the bitmap of D-ports currently set to DHT in the picker and
+    // push it to the firmware. Called from wirePortModes on every picker
+    // change so the firmware knows which ports it's allowed to sample.
+    function sendDhtEnableMask() {
+        if (!state.session) return;
+        let mask = 0;
+        for (let i = 0; i < 4; i++) {
+            if (loadPortMode('D' + (i + 1)) === 'dht') mask |= (1 << i);
+        }
+        // Fire and forget -- ACK failures don't affect the UI.
+        state.session.send(CMD_ENABLE_DHT, new Uint8Array([mask])).catch(() => {});
     }
 
     // Render a digital sensor readout (switch or PIR) into the port's sensor
@@ -1250,6 +1302,29 @@
         pctEl.textContent = pct.toFixed(0) + '%';
         detEl.textContent = raw + ' / ' + volts + ' V @ pino ' + side + ' (A' + pin + ')';
         if (barEl) barEl.style.width = pct.toFixed(1) + '%';
+    }
+
+    // Render DHT temp/humidity. Sentinels 0x7F (temp) / 0xFF (hum) mean
+    // "no reading" -- firmware never polled this port, or its first read
+    // failed (DHT class blocks ~1 s waiting for a response frame, so a
+    // failed read latches "failed" until the picker is toggled off and back
+    // on to re-arm the slot server-side).
+    function fillDht(portName, dht) {
+        const $ = id => hudDiv.querySelector('#' + id);
+        const tEl = $('sbDhtTemp-' + portName);
+        const hEl = $('sbDhtHum-'  + portName);
+        const nEl = $('sbDhtHint-' + portName);
+        if (!tEl) return;
+        const na = (dht.temp === 127 && dht.hum === 255);
+        if (na) {
+            tEl.textContent = '--';
+            hEl.textContent = '--';
+            nEl.textContent = tr('sbLaserNa');    // reuse "sem sensor" string
+            return;
+        }
+        tEl.textContent = dht.temp + '°C';
+        hEl.textContent = dht.hum  + '%';
+        nEl.textContent = 'pino L';
     }
 
     // Render MXLaserV2 distance. mm=0xFFFF is firmware's "no sensor / init
@@ -1460,6 +1535,17 @@
                         dv.getUint16(52, true),
                     ];
                 }
+                if (dv.byteLength >= 62) {
+                    // Phase 3b: DHT temp+hum for D1..D4. int8 temp (C, 0x7F=n/a),
+                    // uint8 hum (%, 0xFF=n/a). Firmware only fills these on
+                    // ports enabled via CMD_ENABLE_DHT; others stay at sentinel.
+                    t.dht = [
+                        { temp: dv.getInt8(54), hum: dv.getUint8(55) },
+                        { temp: dv.getInt8(56), hum: dv.getUint8(57) },
+                        { temp: dv.getInt8(58), hum: dv.getUint8(59) },
+                        { temp: dv.getInt8(60), hum: dv.getUint8(61) },
+                    ];
+                }
                 if (this._onTelemetry) this._onTelemetry(t);
             }
         }
@@ -1641,6 +1727,10 @@
             log(tr('connectedMsg'), 'ok');
             startWatchdog();
             startTelemetryPoll(state.device && state.device.name);
+            // Push saved sensor-config to the fresh session so persisted
+            // per-port picks (e.g. DHT on D3 from last session) take effect
+            // without waiting for the user to touch the picker.
+            sendDhtEnableMask();
         } catch (e) {
             if (e instanceof CancelledError) {
                 log(tr('cancelled'));

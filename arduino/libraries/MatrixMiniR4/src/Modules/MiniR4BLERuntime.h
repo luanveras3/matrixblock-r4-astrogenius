@@ -182,6 +182,12 @@ private:
     uint32_t _bothButtonsSince;   ///< millis() when both buttons first held; 0 = not held
     bool     _gestureLatched;     ///< prevents double-firing while still holding
     uint32_t _pendingSketchId;    ///< value passed to setSketchId(); 0xFFFFFFFF = unset
+    // Phase 3b DHT: bit N = poll DHT on D(N+1). Set via CMD_ENABLE_DHT.
+    // Zero-init = never poll (default). Firmware treats a change to this
+    // mask as a signal to clear the per-port failure flags so a
+    // hot-plugged sensor becomes reachable without a reboot.
+    uint8_t  _dhtEnabledMask;
+    uint8_t  _dhtLastAppliedMask; ///< last mask actually acted upon (for reset detect)
 };
 
 extern MiniR4BLERuntimeClass BLERuntime;

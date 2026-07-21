@@ -44,6 +44,7 @@ enum : uint8_t {
     CMD_START = 0x01, CMD_CHUNK = 0x02, CMD_END   = 0x03,
     CMD_RUN   = 0x04, CMD_STOP  = 0x05, CMD_ERASE = 0x06,
     CMD_INFO  = 0x07, CMD_SET_NAME = 0x08, CMD_TELEMETRY = 0x09,
+    CMD_ENABLE_DHT = 0x0A,
     RSP_ACK   = 0xA0, RSP_STATE = 0xA1, RSP_TELEMETRY = 0xA2,
 };
 
@@ -89,6 +90,8 @@ MiniR4BLERuntimeClass::MiniR4BLERuntimeClass()
     , _bothButtonsSince(0)
     , _gestureLatched(false)
     , _pendingSketchId(SKETCH_ID_UNSET)
+    , _dhtEnabledMask(0)
+    , _dhtLastAppliedMask(0)
 {
     g_instance = this;
 }
@@ -532,7 +535,12 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     //                 (D1), 4,5 (D2), 11,12 (D3), 10,13 (D4).
     //   offset 50..53 MXLaserV2 distance on I2C1 + I2C2    -- phase 3b
     //                 (2 x uint16 LE mm; 0xFFFF = no sensor / read failed).
-
+    //   offset 54..61 DHT11 temp/humidity for D1..D4       -- phase 3b
+    //                 4 x (int8 tempC, uint8 hum%); 0x7F/0xFF = no reading.
+    //                 Only ports whose bit is set in _dhtEnabledMask (via
+    //                 CMD_ENABLE_DHT) are ever polled; others stay at
+    //                 sentinels forever.
+    // Total: 62 bytes.
     const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
     const uint16_t pc     = _vm.pc();
     const int16_t  roll   = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Roll)  * 100.0);
@@ -605,7 +613,84 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     const uint16_t laser2 = s_laserReady[1]
         ? MiniR4.I2C2.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
 
-    uint8_t buf[54] = {
+    // --- phase 3b: DHT11 (MATRIX MXDHT variant) on user-enabled D-ports. ----
+    // We never probe: only ports whose bit is set in _dhtEnabledMask get
+    // polled. A failed read latches _dhtFailed for that port so a mispicked
+    // port doesn't stall the BLE loop every 2 s. Toggling the picker off then
+    // on (client resends CMD_ENABLE_DHT with the mask changed) rearms the
+    // slot -- we detect the mask edge and clear the fail flags for ports
+    // that were newly added since the last apply.
+    static bool     s_dhtDelaySet = false;
+    static int8_t   s_dhtTemp[4]  = { 127, 127, 127, 127 };
+    static uint8_t  s_dhtHum[4]   = { 255, 255, 255, 255 };
+    static bool     s_dhtFailed[4] = { false, false, false, false };
+    static uint32_t s_dhtLastMs   = 0;
+    static uint8_t  s_dhtIdx      = 0;
+    if (!s_dhtDelaySet) {
+        // Default 250 ms per-read backoff is pointless for us -- we already
+        // gate on 2 s round-robin -- and it turns every tick into a 250 ms
+        // BLE stall. Clamp to 0.
+        MiniR4.D1.MXDHT.setDelay(0);
+        MiniR4.D2.MXDHT.setDelay(0);
+        MiniR4.D3.MXDHT.setDelay(0);
+        MiniR4.D4.MXDHT.setDelay(0);
+        s_dhtDelaySet = true;
+    }
+    // Detect newly enabled ports since the last apply -> re-arm their slot.
+    const uint8_t newlyEnabled = (uint8_t)(_dhtEnabledMask & ~_dhtLastAppliedMask);
+    if (newlyEnabled) {
+        for (uint8_t p = 0; p < 4; ++p) {
+            if (newlyEnabled & (1u << p)) {
+                s_dhtFailed[p] = false;
+                s_dhtTemp[p]   = 127;
+                s_dhtHum[p]    = 255;
+            }
+        }
+    }
+    // Also clear cached readings on ports that were just disabled so a later
+    // re-enable doesn't briefly flash stale temps in the UI.
+    const uint8_t nowDisabled = (uint8_t)(~_dhtEnabledMask & _dhtLastAppliedMask);
+    if (nowDisabled) {
+        for (uint8_t p = 0; p < 4; ++p) {
+            if (nowDisabled & (1u << p)) {
+                s_dhtTemp[p] = 127;
+                s_dhtHum[p]  = 255;
+            }
+        }
+    }
+    _dhtLastAppliedMask = _dhtEnabledMask;
+    if (_dhtEnabledMask && (millis() - s_dhtLastMs > 2000)) {
+        for (uint8_t i = 0; i < 4; ++i) {
+            const uint8_t p = (uint8_t)((s_dhtIdx + 1u + i) % 4u);
+            const bool wanted = ((_dhtEnabledMask >> p) & 1u) && !s_dhtFailed[p];
+            if (!wanted) continue;
+            float t = 0.0f;
+            int   h = 0;
+            int   err = 0;
+            switch (p) {
+                case 0: err = MiniR4.D1.MXDHT.readTemperatureHumidity(t, h); break;
+                case 1: err = MiniR4.D2.MXDHT.readTemperatureHumidity(t, h); break;
+                case 2: err = MiniR4.D3.MXDHT.readTemperatureHumidity(t, h); break;
+                case 3: err = MiniR4.D4.MXDHT.readTemperatureHumidity(t, h); break;
+            }
+            if (err == 0) {
+                s_dhtTemp[p] = (int8_t)t;
+                s_dhtHum[p]  = (uint8_t)h;
+            } else {
+                // First failure disables further reads until the client
+                // re-enables. Prevents a permanently-plugged-in but faulty
+                // sensor from stalling every 2 s.
+                s_dhtFailed[p] = true;
+                s_dhtTemp[p]   = 127;
+                s_dhtHum[p]    = 255;
+            }
+            s_dhtIdx    = p;
+            s_dhtLastMs = millis();
+            break;
+        }
+    }
+
+    uint8_t buf[62] = {
         RSP_TELEMETRY,
         (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
         (uint8_t)(_vm.isRunning() ? 1 : 0),
@@ -635,6 +720,11 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         // --- phase 3b: MXLaserV2 distance on I2C1 + I2C2 (mm, 0xFFFF=n/a) ---
         (uint8_t)(laser1 & 0xFF), (uint8_t)((laser1 >> 8) & 0xFF),
         (uint8_t)(laser2 & 0xFF), (uint8_t)((laser2 >> 8) & 0xFF),
+        // --- phase 3b: DHT temp/hum for D1..D4 (0x7F/0xFF = n/a) ------------
+        (uint8_t)s_dhtTemp[0], s_dhtHum[0],
+        (uint8_t)s_dhtTemp[1], s_dhtHum[1],
+        (uint8_t)s_dhtTemp[2], s_dhtHum[2],
+        (uint8_t)s_dhtTemp[3], s_dhtHum[3],
     };
     g_txChar.writeValue(buf, sizeof(buf));
 }
@@ -704,6 +794,16 @@ void MiniR4BLERuntimeClass::_onRxWriteImpl(const uint8_t* data, int len)
         case CMD_TELEMETRY:
             _sendAck(cmd, 0);
             _sendTelemetry();
+            break;
+
+        case CMD_ENABLE_DHT:
+            // Payload byte 1 = bitmap; bit N -> DHT polling on D(N+1).
+            // We never probe DHT autonomously (a single failed read blocks
+            // ~1 s waiting for the sensor's response frame); the IDE opts
+            // ports in explicitly so unrequested D-ports stay quiet.
+            if (len < 2) { _sendAck(cmd, 1); break; }
+            _dhtEnabledMask = data[1] & 0x0F;
+            _sendAck(cmd, 0);
             break;
 
         case CMD_SET_NAME: {
