@@ -57,11 +57,10 @@ uint8_t* const g_programBuf = g_storageBuf + HEADER_SIZE;
 // matches the BLE stack (they are added to the stack once in begin()).
 BLEService        g_uartService("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
 BLECharacteristic g_rxChar     ("6E400002-B5A3-F393-E0A9-E50E24DCCA9E", BLEWrite, 128);
-// maxLen must be >= largest RSP payload. Phase 3a telemetry grew to 50 bytes
-// (motors + analog + digital bitfield); bumped to 64 to leave headroom for a
-// couple more append-only fields before we have to chunk (BLE ATT MTU on
-// Chromium negotiates to ~247, so a 64-byte notification still fits in a
-// single air packet).
+// maxLen must be >= largest RSP payload. Phase 3a telemetry is 50 bytes;
+// bumped to 64 to leave headroom for a couple more append-only fields
+// before we have to chunk (BLE ATT MTU on Chromium negotiates to ~247, so
+// a 64-byte notification still fits in a single air packet).
 BLECharacteristic g_txChar     ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E", BLERead | BLENotify, 64);
 
 DataFlashBlockDevice& g_flash = DataFlashBlockDevice::getInstance();
@@ -531,7 +530,9 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     //   offset 48..49 digital pin bitfield (uint16 LE)     -- phase 3a
     //                 bit n = digitalRead(n); Matrix D-port pins are 2,3
     //                 (D1), 4,5 (D2), 11,12 (D3), 10,13 (D4).
-    // Total: 50 bytes.
+    //   offset 50..53 MXLaserV2 distance on I2C1 + I2C2    -- phase 3b
+    //                 (2 x uint16 LE mm; 0xFFFF = no sensor / read failed).
+
     const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
     const uint16_t pc     = _vm.pc();
     const int16_t  roll   = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Roll)  * 100.0);
@@ -575,7 +576,36 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         if (digitalRead(pins[i])) dbits |= (uint16_t)(1u << pins[i]);
     }
 
-    uint8_t buf[50] = {
+    // --- phase 3b: MXLaserV2 ToF on I2C1 and I2C2 (via PCA954X mux). --------
+    // Lazy init on first telemetry call. begin() probes the model ID register
+    // and returns false fast (~1 ms) if no sensor answers -- so we can safely
+    // try both channels even when only one is populated. When init succeeds we
+    // clamp the per-read timeout to 50 ms (default 500 ms would stall the BLE
+    // stack past its 2 s supervision timeout if the sensor is unplugged
+    // mid-session) and start continuous mode so per-tick reads return the
+    // latest cached range instead of blocking on a single-shot conversion.
+    // Sensors plugged in AFTER init are not detected -- user must reboot.
+    static bool s_laserInited = false;
+    static bool s_laserReady[2] = { false, false };
+    if (!s_laserInited) {
+        s_laserInited = true;
+        if (MiniR4.I2C1.MXLaserV2.begin()) {
+            MiniR4.I2C1.MXLaserV2.setTimeout(50);
+            MiniR4.I2C1.MXLaserV2.startContinuous(50);
+            s_laserReady[0] = true;
+        }
+        if (MiniR4.I2C2.MXLaserV2.begin()) {
+            MiniR4.I2C2.MXLaserV2.setTimeout(50);
+            MiniR4.I2C2.MXLaserV2.startContinuous(50);
+            s_laserReady[1] = true;
+        }
+    }
+    const uint16_t laser1 = s_laserReady[0]
+        ? MiniR4.I2C1.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
+    const uint16_t laser2 = s_laserReady[1]
+        ? MiniR4.I2C2.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
+
+    uint8_t buf[54] = {
         RSP_TELEMETRY,
         (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
         (uint8_t)(_vm.isRunning() ? 1 : 0),
@@ -602,6 +632,9 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         (uint8_t)(a5 & 0xFF), (uint8_t)((a5 >> 8) & 0xFF),
         // --- phase 3a: digital pin bitfield ---
         (uint8_t)(dbits & 0xFF), (uint8_t)((dbits >> 8) & 0xFF),
+        // --- phase 3b: MXLaserV2 distance on I2C1 + I2C2 (mm, 0xFFFF=n/a) ---
+        (uint8_t)(laser1 & 0xFF), (uint8_t)((laser1 >> 8) & 0xFF),
+        (uint8_t)(laser2 & 0xFF), (uint8_t)((laser2 >> 8) & 0xFF),
     };
     g_txChar.writeValue(buf, sizeof(buf));
 }

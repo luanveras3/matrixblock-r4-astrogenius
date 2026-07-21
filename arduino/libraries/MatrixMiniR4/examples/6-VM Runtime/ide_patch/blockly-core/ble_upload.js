@@ -95,6 +95,9 @@
             sbSectionMotors:'Motors',
             sbSectionAnalog:'Analog (A1/A2/A3)',
             sbSectionDigital:'Digital (D1/D2/D3/D4)',
+            sbSectionI2C:   'I2C (I2C1/I2C2)',
+            sbLaserNa:      'no sensor',
+            sbLaserMm:      'mm',
             sbEncoder:      'enc',
             sbSpeed:        'deg/s',
             sbAnalogUnit:   'V',
@@ -190,6 +193,9 @@
             sbSectionMotors:'Motores',
             sbSectionAnalog:'Analogicos (A1/A2/A3)',
             sbSectionDigital:'Digitais (D1/D2/D3/D4)',
+            sbSectionI2C:   'I2C (I2C1/I2C2)',
+            sbLaserNa:      'sem sensor',
+            sbLaserMm:      'mm',
             sbEncoder:      'enc',
             sbSpeed:        'graus/s',
             sbAnalogUnit:   'V',
@@ -743,6 +749,37 @@
               rawAnalogBody(portName, leftPin, rightPin) +
               potBody(portName) +
             '</div>';
+        // I2C port cards (I2C1..I2C2). No L/R concept -- these are single-
+        // device I2C bus channels through the PCA954X mux -- so the header
+        // omits raw pins and only offers sensor modes. First supported:
+        // MXLaserV2 (ToF). Empty body when picker = None. The distance value
+        // comes from a firmware-side lazy init that probes the model ID
+        // register once at boot (bytes 50..53 of the telemetry blob).
+        const laserBody = (portName) =>
+            '<div id="sbBody-' + portName + '-laser" class="port-body" style="display:none;">' +
+              '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:6px;">' +
+                '<span id="sbLaserMm-' + portName + '" style="font-weight:800;' +
+                  'font-size:18px;color:#222;font-variant-numeric:tabular-nums;">--</span>' +
+                '<span id="sbLaserDet-' + portName + '" style="color:#9b9b9b;font-size:10px;' +
+                  'font-variant-numeric:tabular-nums;">' + tr('sbLaserMm') + '</span>' +
+              '</div>' +
+              '<div style="height:6px;background:#f1f1f1;border-radius:3px;margin-top:4px;overflow:hidden;">' +
+                '<div id="sbLaserBar-' + portName + '" style="height:100%;width:0%;' +
+                  'background:' + BRAND_TEAL + ';transition:width .15s;"></div>' +
+              '</div>' +
+            '</div>';
+        // Empty "none" body -- shown when the I2C port has no sensor picked.
+        const noneBody = (portName) =>
+            '<div id="sbBody-' + portName + '-none" class="port-body">' +
+              '<div style="color:#9b9b9b;font-size:10px;font-style:italic;' +
+                'text-align:center;padding:6px 0;">--</div>' +
+            '</div>';
+        const i2cPortCard = (portName) =>
+            '<div style="border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;">' +
+              portHeader(portName, ['none', 'laser']) +
+              noneBody(portName) +
+              laserBody(portName) +
+            '</div>';
         const portsPane =
             section('sbSecMotors', 'sbSectionMotors',
                 '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' +
@@ -760,6 +797,11 @@
                   digitalPortCard('D2', 5, 4)  +
                   digitalPortCard('D3', 12, 11) +
                   digitalPortCard('D4', 13, 10) +
+                '</div>') +
+            section('sbSecI2C', 'sbSectionI2C',
+                '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">' +
+                  i2cPortCard('I2C1') +
+                  i2cPortCard('I2C2') +
                 '</div>' +
                 '<div data-label-key="sbPortsHint" style="color:#9b9b9b;' +
                   'font-size:10px;font-style:italic;margin-top:8px;">' +
@@ -1147,6 +1189,17 @@
                 fillPot(name, lPin, rPin, t.analog[lPin], t.analog[rPin]);
             }
         }
+        // I2C laser cards. Bytes 50..53 carry the two MXLaserV2 distances in
+        // mm; 0xFFFF is the "no sensor / read timeout" sentinel. Reader only
+        // fires when the picker is "laser" for that card.
+        if (t.laser) {
+            const iports = ['I2C1', 'I2C2'];
+            for (let i = 0; i < iports.length; i++) {
+                const name = iports[i];
+                if (loadPortMode(name) !== 'laser') continue;
+                fillLaser(name, t.laser[i]);
+            }
+        }
 
     }
 
@@ -1196,6 +1249,28 @@
         const volts = (raw / 1023 * 5.0).toFixed(2);
         pctEl.textContent = pct.toFixed(0) + '%';
         detEl.textContent = raw + ' / ' + volts + ' V @ pino ' + side + ' (A' + pin + ')';
+        if (barEl) barEl.style.width = pct.toFixed(1) + '%';
+    }
+
+    // Render MXLaserV2 distance. mm=0xFFFF is firmware's "no sensor / init
+    // failed" sentinel; render as "sem sensor" so the student can tell apart
+    // "sensor is there but reads infinity" from "cable disconnected".
+    // Bar caps at 2000 mm (VL53L0X spec top-of-range) for consistent scaling.
+    function fillLaser(portName, mm) {
+        const $ = id => hudDiv.querySelector('#' + id);
+        const mmEl  = $('sbLaserMm-' + portName);
+        const detEl = $('sbLaserDet-' + portName);
+        const barEl = $('sbLaserBar-' + portName);
+        if (!mmEl) return;
+        if (mm === 0xFFFF) {
+            mmEl.textContent = '--';
+            detEl.textContent = tr('sbLaserNa');
+            if (barEl) barEl.style.width = '0%';
+            return;
+        }
+        mmEl.textContent = mm;
+        detEl.textContent = tr('sbLaserMm');
+        const pct = Math.max(0, Math.min(100, (mm / 2000) * 100));
         if (barEl) barEl.style.width = pct.toFixed(1) + '%';
     }
 
@@ -1377,6 +1452,13 @@
                         dv.getUint16(44, true), dv.getUint16(46, true),
                     ];
                     t.digitalBits = dv.getUint16(48, true);
+                }
+                if (dv.byteLength >= 54) {
+                    // Phase 3b: MXLaserV2 mm on I2C1, I2C2. 0xFFFF = no sensor.
+                    t.laser = [
+                        dv.getUint16(50, true),
+                        dv.getUint16(52, true),
+                    ];
                 }
                 if (this._onTelemetry) this._onTelemetry(t);
             }
