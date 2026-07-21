@@ -57,7 +57,12 @@ uint8_t* const g_programBuf = g_storageBuf + HEADER_SIZE;
 // matches the BLE stack (they are added to the stack once in begin()).
 BLEService        g_uartService("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
 BLECharacteristic g_rxChar     ("6E400002-B5A3-F393-E0A9-E50E24DCCA9E", BLEWrite, 128);
-BLECharacteristic g_txChar     ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E", BLERead | BLENotify, 32);
+// maxLen must be >= largest RSP payload. Phase 3a telemetry grew to 50 bytes
+// (motors + analog + digital bitfield); bumped to 64 to leave headroom for a
+// couple more append-only fields before we have to chunk (BLE ATT MTU on
+// Chromium negotiates to ~247, so a 64-byte notification still fits in a
+// single air packet).
+BLECharacteristic g_txChar     ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E", BLERead | BLENotify, 64);
 
 DataFlashBlockDevice& g_flash = DataFlashBlockDevice::getInstance();
 
@@ -550,8 +555,22 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     // Only sample pins the Matrix D-ports expose (2,3,4,5,10,11,12,13).
     // Skipping 0/1 (UART) and 6..9 (unused on Matrix headers) keeps the
     // bitfield honest and avoids reading pins whose state may be random.
-    uint16_t dbits = 0;
+    //
+    // On first entry, force INPUT_PULLUP on the sampled pins. Without it a
+    // switch-to-GND wired into a Matrix D-port floats and digitalRead()
+    // returns stale bits (MATRIX modules only call pinMode() from getL()/
+    // setL() etc., which never runs unless the VM program uses that port).
+    // If the user program later drives a pin (MiniR4.Dx.setL/setR), the
+    // MATRIX module calls pinMode(OUTPUT) internally and overrides us; the
+    // subsequent digitalRead() then reports the driven output level, which
+    // is the useful reading anyway.
     const uint8_t pins[8] = {2, 3, 4, 5, 10, 11, 12, 13};
+    static bool s_pinsPulled = false;
+    if (!s_pinsPulled) {
+        for (uint8_t i = 0; i < 8; ++i) pinMode(pins[i], INPUT_PULLUP);
+        s_pinsPulled = true;
+    }
+    uint16_t dbits = 0;
     for (uint8_t i = 0; i < 8; ++i) {
         if (digitalRead(pins[i])) dbits |= (uint16_t)(1u << pins[i]);
     }
