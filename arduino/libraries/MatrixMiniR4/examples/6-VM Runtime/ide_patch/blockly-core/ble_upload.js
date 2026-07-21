@@ -93,12 +93,24 @@
             sbSubTabState:  'State',
             sbSubTabPorts:  'Ports',
             sbSectionMotors:'Motors',
-            sbSectionAnalog:'Analog',
-            sbSectionDigital:'Digital pins',
+            sbSectionAnalog:'Analog (A1/A2/A3)',
+            sbSectionDigital:'Digital (D1/D2/D3/D4)',
             sbEncoder:      'enc',
             sbSpeed:        'deg/s',
             sbAnalogUnit:   'V',
-            sbPortsHint:    'Values here reflect what the hub can read now. Set pinMode / connect sensors from your program; readouts follow.',
+            sbPortsHint:    'Pick the sensor plugged into each port. Choice is saved per port. \"Raw pins\" always shows the two physical pins (L=left, R=right of the connector).',
+            // --- Per-port sensor picker (phase 3b) ---
+            sbModeRaw:      'Raw pins',
+            sbModeSwitch:   'Switch',
+            sbModePir:      'PIR (motion)',
+            sbModePot:      'Potentiometer',
+            sbModeDht:      'DHT temp/hum',
+            sbModeLaser:    'Laser v2 (ToF)',
+            sbModeNone:     '--',
+            sbSwOpen:       'OPEN',
+            sbSwClosed:     'CLOSED',
+            sbPirMotion:    'MOTION',
+            sbPirIdle:      'idle',
         },
         'pt-BR': {
             connect:        'Conectar',
@@ -176,12 +188,23 @@
             sbSubTabState:  'Estado',
             sbSubTabPorts:  'Portas',
             sbSectionMotors:'Motores',
-            sbSectionAnalog:'Analogicos',
-            sbSectionDigital:'Pinos digitais',
+            sbSectionAnalog:'Analogicos (A1/A2/A3)',
+            sbSectionDigital:'Digitais (D1/D2/D3/D4)',
             sbEncoder:      'enc',
             sbSpeed:        'graus/s',
             sbAnalogUnit:   'V',
-            sbPortsHint:    'Os valores refletem o que o hub consegue ler agora. Configure pinMode / plugue sensores pelo programa; as leituras seguem.',
+            sbPortsHint:    'Escolha o sensor plugado em cada porta. A escolha fica salva por porta. \"Pinos crus\" mostra sempre os dois pinos fisicos (L=esquerda, R=direita do conector).',
+            sbModeRaw:      'Pinos crus',
+            sbModeSwitch:   'Chave (switch)',
+            sbModePir:      'PIR (movimento)',
+            sbModePot:      'Potenciometro',
+            sbModeDht:      'DHT temp/umid',
+            sbModeLaser:    'Laser v2 (ToF)',
+            sbModeNone:     '--',
+            sbSwOpen:       'ABERTO',
+            sbSwClosed:     'FECHADO',
+            sbPirMotion:    'MOVIMENTO',
+            sbPirIdle:      'parado',
         },
     };
     function locale() {
@@ -446,6 +469,7 @@
         hudMounted = true;
         wireCollapsibles();
         wireSubTabs();
+        wirePortModes();           // restore per-port sensor picks (phase 3b)
         setSubTab(loadSubTab());   // restore last sub-tab (state|ports)
         // Backfill any log lines emitted before mount.
         for (let i = 0; i < logBuffer.length; i++) appendLogLine(logBuffer[i]);
@@ -602,35 +626,140 @@
               '<div id="sbM' + n + 'Spd" style="color:#9b9b9b;font-size:10px;' +
                 'font-variant-numeric:tabular-nums;">--</div>' +
             '</div>';
-        const analogCell = (n) =>
+        // ---- Analog sub-cells (kept ids "sbA<pin>Raw/Volt" so fill loop is unchanged) ----
+        const analogCell = (arduinoPin, sideLabel) =>
             '<div style="text-align:center;">' +
-              '<div style="color:#9b9b9b;font-size:10px;text-transform:uppercase;' +
-                'letter-spacing:.05em;">A' + n + '</div>' +
-              '<div id="sbA' + n + 'Raw" style="font-weight:700;font-size:14px;' +
+              '<div style="color:#9b9b9b;font-size:9px;text-transform:uppercase;' +
+                'letter-spacing:.05em;">' + sideLabel + ' <span style="opacity:.6;">A' + arduinoPin + '</span></div>' +
+              '<div id="sbA' + arduinoPin + 'Raw" style="font-weight:700;font-size:14px;' +
                 'color:#222;font-variant-numeric:tabular-nums;">--</div>' +
-              '<div id="sbA' + n + 'Volt" style="color:#9b9b9b;font-size:10px;' +
+              '<div id="sbA' + arduinoPin + 'Volt" style="color:#9b9b9b;font-size:10px;' +
                 'font-variant-numeric:tabular-nums;">--</div>' +
             '</div>';
-        const digitalCell = (p) =>
-            '<div id="sbD' + p + '" style="text-align:center;padding:4px 0;' +
-              'border-radius:4px;background:#f1f1f1;color:#9b9b9b;' +
-              'font-size:10px;font-weight:700;letter-spacing:.04em;">' +
-              'D' + p + '</div>';
+        // ---- Digital chip (id "sbD<pin>") ----
+        const digitalChip = (arduinoPin, sideLabel) =>
+            '<div style="text-align:center;">' +
+              '<div style="color:#9b9b9b;font-size:9px;text-transform:uppercase;' +
+                'letter-spacing:.05em;margin-bottom:2px;">' + sideLabel + ' <span style="opacity:.6;">p' + arduinoPin + '</span></div>' +
+              '<div id="sbD' + arduinoPin + '" style="text-align:center;padding:4px 0;' +
+                'border-radius:4px;background:#f1f1f1;color:#9b9b9b;' +
+                'font-size:10px;font-weight:700;letter-spacing:.04em;">--</div>' +
+            '</div>';
+
+        // ---- Per-port sensor picker (phase 3b) ------------------------------
+        // Each port card has:
+        //   - header with port name + <select> that picks the sensor mode
+        //   - one <div class="port-body port-body-<mode>"> per supported mode
+        //     (only the selected one is visible; others get display:none)
+        // The pin ids inside "raw" body stay the same, so the existing fill
+        // loop keeps writing values regardless of which mode is showing.
+        // Selection persists per port in localStorage.
+        const modeOpt = (mode) =>
+            '<option value="' + mode + '" data-label-key="sbMode' +
+              mode.charAt(0).toUpperCase() + mode.slice(1) + '">' +
+              tr('sbMode' + mode.charAt(0).toUpperCase() + mode.slice(1)) +
+            '</option>';
+        // Small L/R toggle to pick which physical pin of the connector is the
+        // sensor signal. MATRIX modules don't follow a uniform convention
+        // (switch=R, pot=L, PIR varies), so we let the user flip per port.
+        // Hidden for "raw" mode (raw always shows both pins).
+        const sideToggle = (portName) =>
+            '<div class="port-side-toggle" data-port="' + portName + '" ' +
+              'style="display:inline-flex;border:1px solid #ddd;border-radius:3px;' +
+              'overflow:hidden;font-size:10px;font-weight:700;">' +
+              '<button type="button" class="port-side-btn" data-port="' + portName + '" ' +
+                'data-side="L" style="border:0;padding:1px 6px;background:#fff;' +
+                'color:#555;cursor:pointer;">L</button>' +
+              '<button type="button" class="port-side-btn" data-port="' + portName + '" ' +
+                'data-side="R" style="border:0;padding:1px 6px;background:#fff;' +
+                'color:#555;cursor:pointer;border-left:1px solid #ddd;">R</button>' +
+            '</div>';
+        const portHeader = (portName, modes) =>
+            '<div style="display:flex;align-items:center;justify-content:space-between;' +
+              'gap:4px;margin-bottom:6px;">' +
+              '<span style="color:#555;font-size:11px;font-weight:700;' +
+                'letter-spacing:.06em;">' + portName + '</span>' +
+              '<div style="display:flex;align-items:center;gap:4px;">' +
+                sideToggle(portName) +
+                '<select class="port-mode-sel" data-port="' + portName + '" ' +
+                  'style="font:11px -apple-system,Segoe UI,sans-serif;' +
+                  'border:1px solid #ddd;border-radius:3px;padding:1px 2px;' +
+                  'background:#fff;color:#555;cursor:pointer;max-width:90px;">' +
+                  modes.map(modeOpt).join('') +
+                '</select>' +
+              '</div>' +
+            '</div>';
+        const rawDigitalBody = (portName, leftPin, rightPin) =>
+            '<div id="sbBody-' + portName + '-raw" class="port-body">' +
+              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">' +
+                digitalChip(leftPin, 'L') + digitalChip(rightPin, 'R') +
+              '</div>' +
+            '</div>';
+        // Big single-value body for switch/PIR. "sbSensor-<port>" is the label,
+        // "sbSensorHint-<port>" is a smaller line saying which physical pin
+        // triggered so students can debug wiring without leaving the mode.
+        const sensorBody = (portName, mode) =>
+            '<div id="sbBody-' + portName + '-' + mode + '" class="port-body" style="display:none;">' +
+              '<div id="sbSensor-' + portName + '-' + mode + '" ' +
+                'style="text-align:center;padding:10px 0;border-radius:4px;' +
+                'background:#f1f1f1;color:#9b9b9b;font-size:13px;font-weight:800;' +
+                'letter-spacing:.06em;">--</div>' +
+              '<div id="sbSensorHint-' + portName + '-' + mode + '" ' +
+                'style="text-align:center;color:#9b9b9b;font-size:9px;' +
+                'margin-top:3px;font-variant-numeric:tabular-nums;">&nbsp;</div>' +
+            '</div>';
+        const digitalPortCard = (portName, leftPin, rightPin) =>
+            '<div style="border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;">' +
+              portHeader(portName, ['raw', 'switch', 'pir']) +
+              rawDigitalBody(portName, leftPin, rightPin) +
+              sensorBody(portName, 'switch') +
+              sensorBody(portName, 'pir') +
+            '</div>';
+        const rawAnalogBody = (portName, leftPin, rightPin) =>
+            '<div id="sbBody-' + portName + '-raw" class="port-body">' +
+              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">' +
+                analogCell(leftPin, 'L') + analogCell(rightPin, 'R') +
+              '</div>' +
+            '</div>';
+        // Pot body: percentage bar + raw + volts. Uses whichever pin (L or R)
+        // is actively moving; falls back to L if both idle. The picked pin id
+        // is written to sbPotPin-<port> for wiring debug.
+        const potBody = (portName) =>
+            '<div id="sbBody-' + portName + '-pot" class="port-body" style="display:none;">' +
+              '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:6px;">' +
+                '<span id="sbPotPct-' + portName + '" style="font-weight:800;' +
+                  'font-size:18px;color:#222;font-variant-numeric:tabular-nums;">--%</span>' +
+                '<span id="sbPotDet-' + portName + '" style="color:#9b9b9b;font-size:10px;' +
+                  'font-variant-numeric:tabular-nums;">--</span>' +
+              '</div>' +
+              '<div style="height:6px;background:#f1f1f1;border-radius:3px;margin-top:4px;overflow:hidden;">' +
+                '<div id="sbPotBar-' + portName + '" style="height:100%;width:0%;' +
+                  'background:' + BRAND_TEAL + ';transition:width .15s;"></div>' +
+              '</div>' +
+            '</div>';
+        const analogPortCard = (portName, leftPin, rightPin) =>
+            '<div style="border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;">' +
+              portHeader(portName, ['raw', 'pot']) +
+              rawAnalogBody(portName, leftPin, rightPin) +
+              potBody(portName) +
+            '</div>';
         const portsPane =
             section('sbSecMotors', 'sbSectionMotors',
                 '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' +
                   motorCell(1) + motorCell(2) + motorCell(3) + motorCell(4) +
                 '</div>') +
             section('sbSecAnalog', 'sbSectionAnalog',
-                '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">' +
-                  analogCell(0) + analogCell(1) + analogCell(2) +
-                  analogCell(3) + analogCell(4) + analogCell(5) +
+                '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">' +
+                  analogPortCard('A1', 1, 0) +
+                  analogPortCard('A2', 3, 2) +
+                  analogPortCard('A3', 4, 5) +
                 '</div>') +
             section('sbSecDigital', 'sbSectionDigital',
-                '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;">' +
-                  // Matrix D-port physical pins: 2/3 (D1), 4/5 (D2), 10/11..13 (D3/D4)
-                  digitalCell(2)  + digitalCell(3)  + digitalCell(4)  + digitalCell(5)  +
-                  digitalCell(10) + digitalCell(11) + digitalCell(12) + digitalCell(13) +
+                '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">' +
+                  digitalPortCard('D1', 3, 2)  +
+                  digitalPortCard('D2', 5, 4)  +
+                  digitalPortCard('D3', 12, 11) +
+                  digitalPortCard('D4', 13, 10) +
                 '</div>' +
                 '<div data-label-key="sbPortsHint" style="color:#9b9b9b;' +
                   'font-size:10px;font-style:italic;margin-top:8px;">' +
@@ -716,6 +845,122 @@
             const b = ev.target.closest('#bleHudSubTabState, #bleHudSubTabPorts');
             if (!b) return;
             setSubTab(b.id === 'bleHudSubTabPorts' ? 'ports' : 'state');
+        });
+    }
+
+    // ---- Per-port sensor picker persistence (phase 3b) ---------------------
+    // Maps a MATRIX port (D1..D4, A1..A3) to the user's picked sensor mode.
+    // Stored in localStorage as 'matrix-hud-port-<name>'. Default 'raw'.
+    // PORT_PINS gives the physical Arduino-pin pair per port ({left, right})
+    // so sensor renderers can index into t.analog/t.digitalBits without
+    // re-deriving the pinout mapping.
+    const PORT_KEY_PREFIX = 'matrix-hud-port-';
+    const PORT_SIDE_KEY_PREFIX = 'matrix-hud-port-side-';
+    const PORT_PINS = {
+        'D1': [3, 2],   'D2': [5, 4],   'D3': [12, 11], 'D4': [13, 10],
+        'A1': [1, 0],   'A2': [3, 2],   'A3': [4, 5],
+    };
+    // MATRIX modules don't share a uniform signal-pin side (confirmed on
+    // hardware: switch=R, pot=L, PIR varies by module). Default per sensor;
+    // user can flip with the L/R toggle in the port header.
+    const DEFAULT_SIDE_BY_MODE = {
+        raw:    'R',
+        switch: 'R',
+        pir:    'L',
+        pot:    'L',
+        dht:    'R',
+        laser:  'R',
+    };
+    // Modes where the L/R toggle should be visible (raw shows both pins so
+    // the toggle would be meaningless there).
+    const SIDED_MODES = { switch: 1, pir: 1, pot: 1 };
+    function loadPortMode(portName) {
+        try {
+            const v = window.localStorage.getItem(PORT_KEY_PREFIX + portName);
+            return v || 'raw';
+        } catch (_) { return 'raw'; }
+    }
+    function savePortMode(portName, mode) {
+        try {
+            window.localStorage.setItem(PORT_KEY_PREFIX + portName, mode);
+        } catch (_) {}
+    }
+    function loadPortSide(portName, mode) {
+        try {
+            const v = window.localStorage.getItem(PORT_SIDE_KEY_PREFIX + portName + '-' + mode);
+            if (v === 'L' || v === 'R') return v;
+        } catch (_) {}
+        return DEFAULT_SIDE_BY_MODE[mode] || 'R';
+    }
+    function savePortSide(portName, mode, side) {
+        try {
+            window.localStorage.setItem(PORT_SIDE_KEY_PREFIX + portName + '-' + mode, side);
+        } catch (_) {}
+    }
+    // Repaint the L/R toggle for a port: highlight the active side, hide
+    // entirely if the current mode has no side concept (raw).
+    function refreshSideToggle(portName) {
+        if (!hudDiv) return;
+        const container = hudDiv.querySelector(
+            '.port-side-toggle[data-port="' + portName + '"]');
+        if (!container) return;
+        const mode = loadPortMode(portName);
+        if (!SIDED_MODES[mode]) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = '';
+        const side = loadPortSide(portName, mode);
+        const btns = container.querySelectorAll('button.port-side-btn');
+        for (let i = 0; i < btns.length; i++) {
+            const isActive = btns[i].dataset.side === side;
+            btns[i].style.background = isActive ? BRAND_TEAL : '#fff';
+            btns[i].style.color      = isActive ? '#fff'     : '#555';
+        }
+    }
+    // Toggle which mode body is visible for this port. Called on mount to
+    // apply persisted picks and again on every <select> change.
+    function applyPortMode(portName, mode) {
+        if (!hudDiv) return;
+        const bodies = hudDiv.querySelectorAll(
+            '[id^="sbBody-' + portName + '-"]');
+        for (let i = 0; i < bodies.length; i++) {
+            const b = bodies[i];
+            const bMode = b.id.substring(('sbBody-' + portName + '-').length);
+            b.style.display = (bMode === mode) ? '' : 'none';
+        }
+    }
+    function wirePortModes() {
+        if (!hudDiv) return;
+        // Restore each picker + L/R toggle to their saved values.
+        const sels = hudDiv.querySelectorAll('select.port-mode-sel');
+        for (let i = 0; i < sels.length; i++) {
+            const sel = sels[i];
+            const portName = sel.dataset.port;
+            const saved = loadPortMode(portName);
+            for (let j = 0; j < sel.options.length; j++) {
+                if (sel.options[j].value === saved) { sel.selectedIndex = j; break; }
+            }
+            applyPortMode(portName, sel.value);
+            refreshSideToggle(portName);
+        }
+        hudDiv.addEventListener('change', (ev) => {
+            const sel = ev.target.closest('select.port-mode-sel');
+            if (!sel) return;
+            const portName = sel.dataset.port;
+            const mode = sel.value;
+            savePortMode(portName, mode);
+            applyPortMode(portName, mode);
+            refreshSideToggle(portName);
+        });
+        hudDiv.addEventListener('click', (ev) => {
+            const btn = ev.target.closest('button.port-side-btn');
+            if (!btn) return;
+            const portName = btn.dataset.port;
+            const mode = loadPortMode(portName);
+            if (!SIDED_MODES[mode]) return;
+            savePortSide(portName, mode, btn.dataset.side);
+            refreshSideToggle(portName);
         });
     }
 
@@ -872,7 +1117,88 @@
                 if (el) el.style.cssText = ((t.digitalBits >> p) & 1) ? highStyle : lowStyle;
             }
         }
+
+        // --- Phase 3b: derived sensor readouts per port picker ---------------
+        // For each port whose mode is switch/pir/pot, fill the sensor body
+        // with a friendlier readout. Auto-detect which physical pin (L or R)
+        // is the "active" one so the user does not need to know the pinout.
+        // Digital: for switch/PIR we look at both pins and pick whichever is
+        // driven away from the pull-up idle. Analog: for pot we pick whichever
+        // side is not clamped at 0 or 1023.
+        const dports = ['D1','D2','D3','D4'];
+        if (t.digitalBits != null) {
+            for (let i = 0; i < dports.length; i++) {
+                const name = dports[i];
+                const mode = loadPortMode(name);
+                if (mode !== 'switch' && mode !== 'pir') continue;
+                const [lPin, rPin] = PORT_PINS[name];
+                const lHigh = ((t.digitalBits >> lPin) & 1) === 1;
+                const rHigh = ((t.digitalBits >> rPin) & 1) === 1;
+                fillDigitalSensor(name, mode, lPin, rPin, lHigh, rHigh);
+            }
+        }
+        const aports = ['A1','A2','A3'];
+        if (t.analog) {
+            for (let i = 0; i < aports.length; i++) {
+                const name = aports[i];
+                const mode = loadPortMode(name);
+                if (mode !== 'pot') continue;
+                const [lPin, rPin] = PORT_PINS[name];
+                fillPot(name, lPin, rPin, t.analog[lPin], t.analog[rPin]);
+            }
+        }
+
     }
+
+    // Render a digital sensor readout (switch or PIR) into the port's sensor
+    // body. For switch: LOW pin (grounded through the closed contact) = CLOSED;
+    // for PIR: HIGH pin (sensor active-high output) = MOTION. If both pins
+    // agree with the "idle" default, we still show idle instead of assuming a
+    // side. Hint line names the physical pin so students can debug wiring.
+    function fillDigitalSensor(portName, mode, lPin, rPin, lHigh, rHigh) {
+        const $ = id => hudDiv.querySelector('#' + id);
+        const valEl  = $('sbSensor-' + portName + '-' + mode);
+        const hintEl = $('sbSensorHint-' + portName + '-' + mode);
+        if (!valEl) return;
+        // MATRIX modules split which physical pin carries the signal (switch
+        // uses R, pot uses L, PIR varies). We honour the per-port L/R toggle
+        // instead of auto-detecting -- our INPUT_PULLUP forces the unused pin
+        // HIGH, so any live-value heuristic misidentifies the sensor pin
+        // (early version: PIR always showed MOTION via the L pull-up).
+        // Switch: active-LOW (contact grounds the pin).
+        // PIR:    active-HIGH (comparator drives HIGH on motion).
+        const side = loadPortSide(portName, mode);
+        const pin      = (side === 'L') ? lPin  : rPin;
+        const pinHigh  = (side === 'L') ? lHigh : rHigh;
+        const active = (mode === 'switch') ? !pinHigh : pinHigh;
+        const onColor  = (mode === 'switch') ? BRAND_AMBER : BRAND_TEAL;
+        valEl.style.background = active ? onColor : '#f1f1f1';
+        valEl.style.color      = active ? '#333'   : '#9b9b9b';
+        valEl.textContent = active
+            ? tr(mode === 'switch' ? 'sbSwClosed' : 'sbPirMotion')
+            : tr(mode === 'switch' ? 'sbSwOpen'   : 'sbPirIdle');
+        hintEl.textContent = 'pino ' + side + ' (p' + pin + ')';
+    }
+
+    // Render a potentiometer readout. Uses the user-picked side (default L
+    // per hardware testing on MATRIX pot module -- the R pin picks up
+    // EMI-coupled noise that masks the real swing and caps 100% at ~78%).
+    function fillPot(portName, lPin, rPin, lRaw, rRaw) {
+        const $ = id => hudDiv.querySelector('#' + id);
+        const pctEl = $('sbPotPct-' + portName);
+        const detEl = $('sbPotDet-' + portName);
+        const barEl = $('sbPotBar-' + portName);
+        if (!pctEl) return;
+        const side  = loadPortSide(portName, 'pot');
+        const pin   = (side === 'L') ? lPin : rPin;
+        const raw   = (side === 'L') ? lRaw : rRaw;
+        const pct   = Math.max(0, Math.min(100, (raw / 1023) * 100));
+        const volts = (raw / 1023 * 5.0).toFixed(2);
+        pctEl.textContent = pct.toFixed(0) + '%';
+        detEl.textContent = raw + ' / ' + volts + ' V @ pino ' + side + ' (A' + pin + ')';
+        if (barEl) barEl.style.width = pct.toFixed(1) + '%';
+    }
+
     // Motor speed derivation state (client-side; server ships absolute deg).
     let lastMotorDeg = [null, null, null, null];
     let lastMotorTs  = 0;
