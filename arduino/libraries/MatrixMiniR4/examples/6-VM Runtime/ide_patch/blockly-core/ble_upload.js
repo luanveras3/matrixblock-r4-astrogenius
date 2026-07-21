@@ -95,7 +95,7 @@
             sbSectionMotors:'Motors',
             sbSectionAnalog:'Analog (A1/A2/A3)',
             sbSectionDigital:'Digital (D1/D2/D3/D4)',
-            sbSectionI2C:   'I2C (I2C1/I2C2)',
+            sbSectionI2C:   'I2C (I2C1..I2C4)',
             sbLaserNa:      'no sensor',
             sbLaserMm:      'mm',
             sbEncoder:      'enc',
@@ -109,11 +109,13 @@
             sbModePot:      'Potentiometer',
             sbModeDht:      'DHT temp/hum',
             sbModeLaser:    'Laser v2 (ToF)',
+            sbModeColor:    'Color v3',
             sbModeNone:     '--',
             sbSwOpen:       'OPEN',
             sbSwClosed:     'CLOSED',
             sbPirMotion:    'MOTION',
             sbPirIdle:      'idle',
+            sbColorNa:      'no reading',
         },
         'pt-BR': {
             connect:        'Conectar',
@@ -193,7 +195,7 @@
             sbSectionMotors:'Motores',
             sbSectionAnalog:'Analogicos (A1/A2/A3)',
             sbSectionDigital:'Digitais (D1/D2/D3/D4)',
-            sbSectionI2C:   'I2C (I2C1/I2C2)',
+            sbSectionI2C:   'I2C (I2C1..I2C4)',
             sbLaserNa:      'sem sensor',
             sbLaserMm:      'mm',
             sbEncoder:      'enc',
@@ -206,11 +208,13 @@
             sbModePot:      'Potenciometro',
             sbModeDht:      'DHT temp/umid',
             sbModeLaser:    'Laser v2 (ToF)',
+            sbModeColor:    'Cor v3',
             sbModeNone:     '--',
             sbSwOpen:       'ABERTO',
             sbSwClosed:     'FECHADO',
             sbPirMotion:    'MOVIMENTO',
             sbPirIdle:      'parado',
+            sbColorNa:      'sem leitura',
         },
     };
     function locale() {
@@ -801,11 +805,28 @@
               '<div style="color:#9b9b9b;font-size:10px;font-style:italic;' +
                 'text-align:center;padding:6px 0;">--</div>' +
             '</div>';
+        // MXColorV3 body: RGB swatch + color-id label. The swatch background
+        // updates every tick from the R/G/B bytes so it reads like a
+        // physical color chip.
+        const colorBody = (portName) =>
+            '<div id="sbBody-' + portName + '-color" class="port-body" style="display:none;">' +
+              '<div style="display:flex;align-items:center;gap:8px;">' +
+                '<div id="sbColorSwatch-' + portName + '" style="width:38px;height:38px;' +
+                  'border-radius:6px;border:1px solid #ddd;background:#f1f1f1;flex:0 0 auto;"></div>' +
+                '<div style="flex:1;">' +
+                  '<div id="sbColorName-' + portName + '" style="font-weight:800;' +
+                    'font-size:13px;color:#222;">--</div>' +
+                  '<div id="sbColorRgb-' + portName + '" style="color:#9b9b9b;font-size:10px;' +
+                    'font-variant-numeric:tabular-nums;">--</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
         const i2cPortCard = (portName) =>
             '<div style="border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;">' +
-              portHeader(portName, ['none', 'laser']) +
+              portHeader(portName, ['none', 'laser', 'color']) +
               noneBody(portName) +
               laserBody(portName) +
+              colorBody(portName) +
             '</div>';
         const portsPane =
             section('sbSecMotors', 'sbSectionMotors',
@@ -829,6 +850,8 @@
                 '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">' +
                   i2cPortCard('I2C1') +
                   i2cPortCard('I2C2') +
+                  i2cPortCard('I2C3') +
+                  i2cPortCard('I2C4') +
                 '</div>' +
                 '<div data-label-key="sbPortsHint" style="color:#9b9b9b;' +
                   'font-size:10px;font-style:italic;margin-top:8px;">' +
@@ -1219,15 +1242,19 @@
                 fillPot(name, lPin, rPin, t.analog[lPin], t.analog[rPin]);
             }
         }
-        // I2C laser cards. Bytes 50..53 carry the two MXLaserV2 distances in
-        // mm; 0xFFFF is the "no sensor / read timeout" sentinel. Reader only
-        // fires when the picker is "laser" for that card.
-        if (t.laser) {
-            const iports = ['I2C1', 'I2C2'];
-            for (let i = 0; i < iports.length; i++) {
-                const name = iports[i];
-                if (loadPortMode(name) !== 'laser') continue;
+        // I2C sensor cards. Both laser (bytes 50..53) and color (62..69)
+        // read every tick regardless of picker choice -- picker only picks
+        // which readout to display, since one physical MATRIX I2C port
+        // typically hosts a single device so at most one sensor succeeds
+        // per channel.
+        const iports = ['I2C1', 'I2C2', 'I2C3', 'I2C4'];
+        for (let i = 0; i < iports.length; i++) {
+            const name = iports[i];
+            const mode = loadPortMode(name);
+            if (mode === 'laser' && t.laser && i < t.laser.length) {
                 fillLaser(name, t.laser[i]);
+            } else if (mode === 'color' && t.color && i < t.color.length) {
+                fillColor(name, t.color[i]);
             }
         }
         // DHT cards. Bytes 54..61 carry 4 x (int8 temp C, uint8 hum %);
@@ -1325,6 +1352,34 @@
         tEl.textContent = dht.temp + '°C';
         hEl.textContent = dht.hum  + '%';
         nEl.textContent = 'pino L';
+    }
+
+    // Render MXColorV3 readout: swatch background follows the RGB triple,
+    // label maps the firmware's ColorID enum to a human name. All-zero R/G/B
+    // AND id=-1 means firmware never got a successful begin() for this
+    // channel (sensor absent or on the other I2C port).
+    function fillColor(portName, c) {
+        const $ = id => hudDiv.querySelector('#' + id);
+        const swEl   = $('sbColorSwatch-' + portName);
+        const nameEl = $('sbColorName-'   + portName);
+        const rgbEl  = $('sbColorRgb-'    + portName);
+        if (!swEl) return;
+        const na = (c.r === 0 && c.g === 0 && c.b === 0 && c.id === -1);
+        if (na) {
+            swEl.style.background = '#f1f1f1';
+            nameEl.textContent = '--';
+            rgbEl.textContent  = tr('sbColorNa');
+            return;
+        }
+        // MXColorV3 getColorID enum from MiniR4_MXColorV3.h. Slots 2/5/8
+        // are unused per the header; guard with a default.
+        const NAMES = ['Black', 'Violet', '', 'Blue', 'Cyan', '', 'Green',
+                       'Yellow', '', 'Red', 'White'];
+        const label = (c.id >= 0 && c.id < NAMES.length && NAMES[c.id])
+                      ? NAMES[c.id] : ('id=' + c.id);
+        swEl.style.background = 'rgb(' + c.r + ',' + c.g + ',' + c.b + ')';
+        nameEl.textContent = label;
+        rgbEl.textContent  = 'R:' + c.r + ' G:' + c.g + ' B:' + c.b;
     }
 
     // Render MXLaserV2 distance. mm=0xFFFF is firmware's "no sensor / init
@@ -1545,6 +1600,26 @@
                         { temp: dv.getInt8(58), hum: dv.getUint8(59) },
                         { temp: dv.getInt8(60), hum: dv.getUint8(61) },
                     ];
+                }
+                if (dv.byteLength >= 70) {
+                    // Phase 3c: MXColorV3 on I2C1, I2C2. R/G/B are uint8
+                    // (0..255 normalized); id is int8 (-1..10 per the
+                    // MXColorV3 getColorID enum). All-zero + id=-1 means
+                    // firmware never got a successful init on that channel.
+                    t.color = [
+                        { r: dv.getUint8(62), g: dv.getUint8(63), b: dv.getUint8(64), id: dv.getInt8(65) },
+                        { r: dv.getUint8(66), g: dv.getUint8(67), b: dv.getUint8(68), id: dv.getInt8(69) },
+                    ];
+                }
+                if (dv.byteLength >= 82) {
+                    // Phase 3c: laser + color on I2C3, I2C4. Appended after
+                    // the I2C1/I2C2 blocks to keep the older layout intact.
+                    t.laser.push(
+                        dv.getUint16(70, true),
+                        dv.getUint16(72, true));
+                    t.color.push(
+                        { r: dv.getUint8(74), g: dv.getUint8(75), b: dv.getUint8(76), id: dv.getInt8(77) },
+                        { r: dv.getUint8(78), g: dv.getUint8(79), b: dv.getUint8(80), id: dv.getInt8(81) });
                 }
                 if (this._onTelemetry) this._onTelemetry(t);
             }

@@ -58,11 +58,11 @@ uint8_t* const g_programBuf = g_storageBuf + HEADER_SIZE;
 // matches the BLE stack (they are added to the stack once in begin()).
 BLEService        g_uartService("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
 BLECharacteristic g_rxChar     ("6E400002-B5A3-F393-E0A9-E50E24DCCA9E", BLEWrite, 128);
-// maxLen must be >= largest RSP payload. Phase 3a telemetry is 50 bytes;
-// bumped to 64 to leave headroom for a couple more append-only fields
-// before we have to chunk (BLE ATT MTU on Chromium negotiates to ~247, so
-// a 64-byte notification still fits in a single air packet).
-BLECharacteristic g_txChar     ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E", BLERead | BLENotify, 64);
+// maxLen must be >= largest RSP payload. Bumped to 128 in phase 3c to leave
+// headroom for future I2C sensors (each new slot adds several bytes; a single
+// ATT notification at 128 B still fits under the ~247 B MTU Chromium
+// negotiates, so no chunking needed).
+BLECharacteristic g_txChar     ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E", BLERead | BLENotify, 128);
 
 DataFlashBlockDevice& g_flash = DataFlashBlockDevice::getInstance();
 
@@ -540,7 +540,16 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
     //                 Only ports whose bit is set in _dhtEnabledMask (via
     //                 CMD_ENABLE_DHT) are ever polled; others stay at
     //                 sentinels forever.
-    // Total: 62 bytes.
+    //   offset 62..69 MXColorV3 on I2C1 + I2C2             -- phase 3c
+    //                 2 x (uint8 R, uint8 G, uint8 B, int8 ColorID).
+    //                 All-zero R/G/B + ColorID=-1 (0xFF) = no reading /
+    //                 sensor not initialised.
+    //   offset 70..73 MXLaserV2 distance on I2C3 + I2C4    -- phase 3c
+    //                 (2 x uint16 LE mm; 0xFFFF = no sensor). Split from
+    //                 I2C1/I2C2 to preserve append-only for older clients.
+    //   offset 74..81 MXColorV3 on I2C3 + I2C4             -- phase 3c
+    //                 Same encoding as bytes 62..69.
+    // Total: 82 bytes.
     const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
     const uint16_t pc     = _vm.pc();
     const int16_t  roll   = (int16_t)(MiniR4.Motion.getEuler(MiniR4Motion::AxisType::Roll)  * 100.0);
@@ -584,19 +593,22 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         if (digitalRead(pins[i])) dbits |= (uint16_t)(1u << pins[i]);
     }
 
-    // --- phase 3b: MXLaserV2 ToF on I2C1 and I2C2 (via PCA954X mux). --------
-    // Lazy init on first telemetry call. begin() probes the model ID register
-    // and returns false fast (~1 ms) if no sensor answers -- so we can safely
-    // try both channels even when only one is populated. When init succeeds we
-    // clamp the per-read timeout to 50 ms (default 500 ms would stall the BLE
-    // stack past its 2 s supervision timeout if the sensor is unplugged
-    // mid-session) and start continuous mode so per-tick reads return the
-    // latest cached range instead of blocking on a single-shot conversion.
-    // Sensors plugged in AFTER init are not detected -- user must reboot.
-    static bool s_laserInited = false;
-    static bool s_laserReady[2] = { false, false };
-    if (!s_laserInited) {
-        s_laserInited = true;
+    // --- phase 3b/3c: MXLaserV2 + MXColorV3 on all 4 I2C mux channels ------
+    // Lazy init: try begin() on both sensor drivers per channel once. begin()
+    // returns false fast (~1 ms) when no sensor answers, so probing all 4
+    // channels for both sensor types costs negligible boot time. Laser gets
+    // a 50 ms per-read timeout + continuous mode (default 500 ms would stall
+    // BLE past its 2 s supervision timeout if a sensor is unplugged mid-
+    // session). A MATRIX I2C port physically hosts a single device, so at
+    // most one of {laser, color} succeeds per channel; the client picker
+    // chooses which readout to display.
+    // Sensors plugged in AFTER init aren't detected -- user must reboot.
+    static bool s_i2cInited = false;
+    static bool s_laserReady[4] = { false, false, false, false };
+    static bool s_colorReady[4] = { false, false, false, false };
+    if (!s_i2cInited) {
+        s_i2cInited = true;
+        // Laser probes.
         if (MiniR4.I2C1.MXLaserV2.begin()) {
             MiniR4.I2C1.MXLaserV2.setTimeout(50);
             MiniR4.I2C1.MXLaserV2.startContinuous(50);
@@ -607,11 +619,58 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
             MiniR4.I2C2.MXLaserV2.startContinuous(50);
             s_laserReady[1] = true;
         }
+        if (MiniR4.I2C3.MXLaserV2.begin()) {
+            MiniR4.I2C3.MXLaserV2.setTimeout(50);
+            MiniR4.I2C3.MXLaserV2.startContinuous(50);
+            s_laserReady[2] = true;
+        }
+        if (MiniR4.I2C4.MXLaserV2.begin()) {
+            MiniR4.I2C4.MXLaserV2.setTimeout(50);
+            MiniR4.I2C4.MXLaserV2.startContinuous(50);
+            s_laserReady[3] = true;
+        }
+        // Color probes.
+        if (MiniR4.I2C1.MXColorV3.begin()) s_colorReady[0] = true;
+        if (MiniR4.I2C2.MXColorV3.begin()) s_colorReady[1] = true;
+        if (MiniR4.I2C3.MXColorV3.begin()) s_colorReady[2] = true;
+        if (MiniR4.I2C4.MXColorV3.begin()) s_colorReady[3] = true;
     }
     const uint16_t laser1 = s_laserReady[0]
         ? MiniR4.I2C1.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
     const uint16_t laser2 = s_laserReady[1]
         ? MiniR4.I2C2.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
+    const uint16_t laser3 = s_laserReady[2]
+        ? MiniR4.I2C3.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
+    const uint16_t laser4 = s_laserReady[3]
+        ? MiniR4.I2C4.MXLaserV2.getDistance() : (uint16_t)0xFFFF;
+    uint8_t color_r[4] = { 0, 0, 0, 0 };
+    uint8_t color_g[4] = { 0, 0, 0, 0 };
+    uint8_t color_b[4] = { 0, 0, 0, 0 };
+    int8_t  color_id[4] = { -1, -1, -1, -1 };
+    if (s_colorReady[0]) {
+        color_r[0]  = (uint8_t)MiniR4.I2C1.MXColorV3.getR();
+        color_g[0]  = (uint8_t)MiniR4.I2C1.MXColorV3.getG();
+        color_b[0]  = (uint8_t)MiniR4.I2C1.MXColorV3.getB();
+        color_id[0] = (int8_t) MiniR4.I2C1.MXColorV3.getColorID();
+    }
+    if (s_colorReady[1]) {
+        color_r[1]  = (uint8_t)MiniR4.I2C2.MXColorV3.getR();
+        color_g[1]  = (uint8_t)MiniR4.I2C2.MXColorV3.getG();
+        color_b[1]  = (uint8_t)MiniR4.I2C2.MXColorV3.getB();
+        color_id[1] = (int8_t) MiniR4.I2C2.MXColorV3.getColorID();
+    }
+    if (s_colorReady[2]) {
+        color_r[2]  = (uint8_t)MiniR4.I2C3.MXColorV3.getR();
+        color_g[2]  = (uint8_t)MiniR4.I2C3.MXColorV3.getG();
+        color_b[2]  = (uint8_t)MiniR4.I2C3.MXColorV3.getB();
+        color_id[2] = (int8_t) MiniR4.I2C3.MXColorV3.getColorID();
+    }
+    if (s_colorReady[3]) {
+        color_r[3]  = (uint8_t)MiniR4.I2C4.MXColorV3.getR();
+        color_g[3]  = (uint8_t)MiniR4.I2C4.MXColorV3.getG();
+        color_b[3]  = (uint8_t)MiniR4.I2C4.MXColorV3.getB();
+        color_id[3] = (int8_t) MiniR4.I2C4.MXColorV3.getColorID();
+    }
 
     // --- phase 3b: DHT11 (MATRIX MXDHT variant) on user-enabled D-ports. ----
     // We never probe: only ports whose bit is set in _dhtEnabledMask get
@@ -690,7 +749,7 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         }
     }
 
-    uint8_t buf[62] = {
+    uint8_t buf[82] = {
         RSP_TELEMETRY,
         (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
         (uint8_t)(_vm.isRunning() ? 1 : 0),
@@ -725,6 +784,15 @@ void MiniR4BLERuntimeClass::_sendTelemetry()
         (uint8_t)s_dhtTemp[1], s_dhtHum[1],
         (uint8_t)s_dhtTemp[2], s_dhtHum[2],
         (uint8_t)s_dhtTemp[3], s_dhtHum[3],
+        // --- phase 3c: MXColorV3 R/G/B/ColorID on I2C1 + I2C2 --------------
+        color_r[0], color_g[0], color_b[0], (uint8_t)color_id[0],
+        color_r[1], color_g[1], color_b[1], (uint8_t)color_id[1],
+        // --- phase 3c: laser distance on I2C3 + I2C4 (0xFFFF = n/a) --------
+        (uint8_t)(laser3 & 0xFF), (uint8_t)((laser3 >> 8) & 0xFF),
+        (uint8_t)(laser4 & 0xFF), (uint8_t)((laser4 >> 8) & 0xFF),
+        // --- phase 3c: MXColorV3 R/G/B/ColorID on I2C3 + I2C4 --------------
+        color_r[2], color_g[2], color_b[2], (uint8_t)color_id[2],
+        color_r[3], color_g[3], color_b[3], (uint8_t)color_id[3],
     };
     g_txChar.writeValue(buf, sizeof(buf));
 }
