@@ -24,6 +24,29 @@
 !ROADMAP.md
 !docs/
 !docs/*.md
+!docs/poc/
+!docs/poc/**
+
+# WiFi TCP + OTA tooling (bin2ota port, cross-check, fixtures)
+!tools/
+!tools/bin2ota.js
+!tools/bin2ota.test.js
+!tools/wifi_wrapper.test.js
+!tools/lzss_ref.py
+!tools/fixtures/
+!tools/fixtures/blink.bin
+!tools/fixtures/UNOR4WIFI_Animation.ota
+
+# WiFi runtime firmware module (delta over the stock MatrixMiniR4 lib)
+!arduino/libraries/
+!arduino/libraries/MatrixMiniR4/
+!arduino/libraries/MatrixMiniR4/src/
+!arduino/libraries/MatrixMiniR4/src/Modules/
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.h
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.cpp
+!arduino/libraries/MatrixMiniR4/examples/
+!arduino/libraries/MatrixMiniR4/examples/7-WiFi*/
+!arduino/libraries/MatrixMiniR4/examples/7-WiFi*/**
 
 # GitHub Actions
 !.github/
