@@ -23,11 +23,15 @@ const OUT      = process.env.ASAR_OUT     || 'C:/matrixblock-r4/resources/app.as
 const SRC_DIR  = process.env.ASAR_SRC_DIR || 'C:/matrixblock-r4/resources/app_src';
 
 // Files to patch: [pathInsideAsar, pathRelativeToSRC_DIR]
+// Files that don't exist in the original asar (e.g. the WiFi uploader) get a
+// fresh header entry created for them — see getOrCreateEntry().
 const PATCHES = [
-  ['app.compressed.js',                'app.compressed.js'],
-  ['blockly-core/msg/scratch_msgs.js', 'blockly-core/msg/scratch_msgs.js'],
-  ['blockly-core/blocks/_mini.js',     'blockly-core/blocks/_mini.js'],
-  ['views/main.html',                  'views/main.html'],
+  ['app.compressed.js',                       'app.compressed.js'],
+  ['blockly-core/msg/scratch_msgs.js',        'blockly-core/msg/scratch_msgs.js'],
+  ['blockly-core/blocks/_mini.js',            'blockly-core/blocks/_mini.js'],
+  ['blockly-core/arduino_wifi_wrapper.js',    'blockly-core/arduino_wifi_wrapper.js'],
+  ['blockly-core/wifi_upload.js',             'blockly-core/wifi_upload.js'],
+  ['views/main.html',                         'views/main.html'],
 ];
 
 console.log('Reading original asar backup...');
@@ -44,13 +48,19 @@ console.log('origDataSize :', origDataSize);
 const headerJson = orig.slice(16, 16 + origHSize).toString('utf8');
 const header = JSON.parse(headerJson);
 
-function getEntry(filePath) {
+function getOrCreateEntry(filePath) {
   const parts = filePath.split('/');
   let node = header.files;
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
-    const child = node[p];
-    if (!child) throw new Error('Cannot find ' + filePath + ' in header at: ' + p);
+    let child = node[p];
+    if (!child) {
+      // New file (or intermediate dir) not present in the pristine asar —
+      // create the header node; offset/size are filled by the caller.
+      child = i < parts.length - 1 ? { files: {} } : {};
+      node[p] = child;
+      console.log('Creating new asar entry:', parts.slice(0, i + 1).join('/'));
+    }
     if (i < parts.length - 1) {
       node = child.files;
       if (!node) throw new Error('Expected .files on dir node: ' + p);
@@ -66,7 +76,7 @@ const patchedFiles = [];
 let offsetAccum = origDataSize;
 
 for (const [asarPath, srcPath] of PATCHES) {
-  const entry = getEntry(asarPath);
+  const entry = getOrCreateEntry(asarPath);
   const buf = fs.readFileSync(path.join(SRC_DIR, srcPath));
 
   if (buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF)

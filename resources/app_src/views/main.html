@@ -476,6 +476,13 @@
 	<!-- <script type="module" src="../src/app.js"></script> -->
 	<!-- <script type="text/javascript" src="../app.bundle.js"></script> -->
 	<script type="text/javascript" src="../app.compressed.js"></script>
+	<!-- WiFi TCP + OTA upload (feature/wifi-tcp-ota):
+	     arduino_wifi_wrapper.js patches Blockly.Arduino.finish so every
+	     compiled sketch embeds the MiniR4WiFiRuntime (always reachable);
+	     wifi_upload.js adds the "Send via WiFi" button, robot picker and
+	     OTA progress UI. Both are additive — USB upload is untouched. -->
+	<script type="text/javascript" src="../blockly-core/arduino_wifi_wrapper.js"></script>
+	<script type="text/javascript" src="../blockly-core/wifi_upload.js"></script>
 	<!--
 		AstroGenius extensions for MATRIXblock Mini R4:
 		  - Tab manager (multiple projects open simultaneously)
