@@ -24,19 +24,32 @@
 // --- Sizing constants (must match the runtime protocol on the client side) --
 namespace {
 
-constexpr uint16_t MAX_PROGRAM     = 4096;
+constexpr uint16_t MAX_PROGRAM     = 6144;   // was 4096 -- bytecode now spans blocks 1..6
 constexpr uint16_t HEADER_SIZE     = 8;
 constexpr uint32_t DATAFLASH_BLOCK = 1024;
 constexpr uint32_t DATAFLASH_BASE  = 1024;                      // start of block 1
-constexpr uint32_t ENABLE_FLAG_ADDR = DATAFLASH_BASE + 4 * DATAFLASH_BLOCK; // block 5
-constexpr uint32_t SKETCH_ID_ADDR   = ENABLE_FLAG_ADDR + 4;                 // block 5 offset 4
-constexpr uint32_t SKETCH_ID_UNSET  = 0xFFFFFFFFu;
-constexpr uint32_t DEVICE_NAME_ADDR = DATAFLASH_BASE + 5 * DATAFLASH_BLOCK; // block 6
-constexpr uint8_t  DEVICE_NAME_MAGIC[4] = {'M', 'B', 'R', 'N'};
-constexpr uint8_t  MAX_DEVICE_NAME  = 24;                                   // fits under 31-byte ADV budget
-constexpr uint8_t  NAME_HEADER_SIZE = 5;                                    // 4 magic + 1 length
-constexpr const char* DEFAULT_NAME  = "MATRIX-R4-Runtime";
+constexpr uint32_t CONFIG_ADDR     = DATAFLASH_BASE + 6 * DATAFLASH_BLOCK; // block 7 (fused config)
+constexpr uint32_t SKETCH_ID_UNSET = 0xFFFFFFFFu;
+constexpr uint8_t  MAX_DEVICE_NAME = 24;                                   // fits under 31-byte ADV budget
+constexpr const char* DEFAULT_NAME = "MATRIX-R4-Runtime";
 constexpr uint8_t  MAGIC[4]        = {'M', 'B', 'R', '4'};
+constexpr uint8_t  CONFIG_MAGIC[4] = {'M', 'B', 'R', 'C'};      // block 7 marker
+
+// Fused config block layout (all offsets from CONFIG_ADDR, 44 bytes total,
+// rounded up to a 4-byte program size). Erased flash reads 0xFF everywhere;
+// missing magic means "no config yet -- use defaults":
+//   0..3   MBRC magic (presence flag)
+//   4      enable byte (0xFF=on, 0x00=off)
+//   5..7   padding
+//   8..11  sketch ID (uint32 LE)  -- 0xFFFFFFFF = unset
+//   12     name length (1..MAX_DEVICE_NAME) or 0xFF = no name set
+//   13..15 padding
+//   16..39 name bytes (24 reserved, unused tail = 0xFF)
+constexpr uint32_t CFG_OFF_ENABLE  = 4;
+constexpr uint32_t CFG_OFF_SKETCH  = 8;
+constexpr uint32_t CFG_OFF_NAMELEN = 12;
+constexpr uint32_t CFG_OFF_NAMEBUF = 16;
+constexpr uint32_t CONFIG_WRITE_SIZE = 40; // 16 header + 24 name, already 4-aligned
 constexpr uint8_t  STEPS_PER_POLL  = 32;
 constexpr uint32_t TOGGLE_HOLD_MS  = 3000;
 
@@ -101,6 +114,17 @@ bool MiniR4BLERuntimeClass::isRunningVM() const
     return _vm.isRunning();
 }
 
+// Free RAM via the classic newlib trick: stack pointer minus current heap top.
+// sbrk(0) returns the current program break (top of heap). Subtracting the
+// address of a local variable (which lives at the top of the current stack
+// frame) yields the byte gap between them -- the room we still have to grow.
+extern "C" char* sbrk(int incr);
+size_t MiniR4BLERuntimeClass::freeRam()
+{
+    char stack_marker;
+    return (size_t)(&stack_marker - reinterpret_cast<char*>(sbrk(0)));
+}
+
 // --- Public API -------------------------------------------------------------
 
 void MiniR4BLERuntimeClass::begin()
@@ -108,6 +132,11 @@ void MiniR4BLERuntimeClass::begin()
     if (_begun) { BLERT_TRACE("begin() re-entry ignored"); return; }
     _begun = true;
     BLERT_TRACE("begin() entered");
+
+#ifdef MINIR4_BLE_RUNTIME_DEBUG
+    Serial.print(F("[BLERT] free RAM @begin entry: "));
+    Serial.println((unsigned long)freeRam());
+#endif
 
     _bleEnabled = _readEnableFlag();
 #ifdef MINIR4_BLE_RUNTIME_DEBUG
@@ -128,7 +157,12 @@ void MiniR4BLERuntimeClass::begin()
     if (sketchIdChanged) {
         BLERT_TRACE("sketch id changed -- wiping stored program");
         (void)_eraseFlash();
-        _writeBlock5(_bleEnabled, _pendingSketchId);
+        // Persist the new sketch ID so the next boot doesn't wipe again.
+        // Reads existing name+enable so we don't lose them.
+        char nameBuf[MAX_DEVICE_NAME + 1] = {0};
+        (void)_readDeviceName(nameBuf, sizeof(nameBuf));
+        _writeConfig(_bleEnabled, _pendingSketchId,
+                     nameBuf[0] ? nameBuf : nullptr);
     }
 
     if (_loadFromFlash() && _programSize > 0) {
@@ -192,6 +226,10 @@ void MiniR4BLERuntimeClass::begin()
     BLE.advertise();
     _bleActive = true;
     BLERT_TRACE("advertise() called");
+#ifdef MINIR4_BLE_RUNTIME_DEBUG
+    Serial.print(F("[BLERT] free RAM @begin exit:  "));
+    Serial.println((unsigned long)freeRam());
+#endif
 }
 
 void MiniR4BLERuntimeClass::poll()
@@ -383,78 +421,110 @@ bool MiniR4BLERuntimeClass::_eraseFlash()
     return (g_flash.erase(DATAFLASH_BASE, DATAFLASH_BLOCK) == 0);
 }
 
-// --- Enable-flag + sketch-ID storage (block 5) ------------------------------
-// Fresh flash reads back as 0xFF, which we interpret as "enabled" so a
-// brand-new R4 boots with BLE on by default. Writing 0x00 disables it.
-// The sketch ID at offset 4 identifies the running compiled sketch so the
-// runtime can detect a fresh USB reflash and wipe stale bytecode.
+// --- Fused config block (block 7) -------------------------------------------
+// A single 40-byte record holds the enable flag, sketch ID (for USB-reflash
+// detection), and custom BLE local name. Every writer rewrites the whole
+// record: erase is 1 KB-atomic so per-slice updates would clobber each other.
+// A brand-new R4 (block 7 all 0xFF) reads back as: enabled + no sketch ID +
+// no custom name -- so the hub boots reachable and IDE-detectable out of the
+// box. Migration from the old block-5/6 layout is silent: we simply ignore
+// what's in those blocks and start clean.
+
+bool MiniR4BLERuntimeClass::_readConfig(bool& enabled, uint32_t& sketchId,
+                                        char* nameOut, size_t nameOutLen)
+{
+    // Defaults for a fresh / unrecognized config block.
+    enabled  = true;
+    sketchId = SKETCH_ID_UNSET;
+    if (nameOut && nameOutLen > 0) nameOut[0] = '\0';
+
+    alignas(4) uint8_t buf[CONFIG_WRITE_SIZE];
+    if (g_flash.read(buf, CONFIG_ADDR, sizeof(buf)) != 0) return false;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (buf[i] != CONFIG_MAGIC[i]) return true;   // no magic = defaults, still a successful read
+    }
+
+    enabled  = (buf[CFG_OFF_ENABLE] != 0x00);
+    sketchId = (uint32_t)buf[CFG_OFF_SKETCH]
+             | ((uint32_t)buf[CFG_OFF_SKETCH + 1] << 8)
+             | ((uint32_t)buf[CFG_OFF_SKETCH + 2] << 16)
+             | ((uint32_t)buf[CFG_OFF_SKETCH + 3] << 24);
+
+    if (nameOut && nameOutLen > 1) {
+        const uint8_t len = buf[CFG_OFF_NAMELEN];
+        if (len >= 1 && len <= MAX_DEVICE_NAME && len < nameOutLen) {
+            bool printable = true;
+            for (uint8_t i = 0; i < len; ++i) {
+                const uint8_t c = buf[CFG_OFF_NAMEBUF + i];
+                if (c < 0x20 || c > 0x7E) { printable = false; break; }
+            }
+            if (printable) {
+                memcpy(nameOut, buf + CFG_OFF_NAMEBUF, len);
+                nameOut[len] = '\0';
+            }
+        }
+    }
+    return true;
+}
+
+bool MiniR4BLERuntimeClass::_writeConfig(bool enabled, uint32_t sketchId,
+                                        const char* name)
+{
+    // Erased flash reads 0xFF: if the caller wants the pure default state
+    // (enabled + no ID + no custom name), we can just wipe and skip the
+    // program step. Saves one dataflash program cycle on fresh hubs.
+    if (g_flash.erase(CONFIG_ADDR, DATAFLASH_BLOCK) != 0) return false;
+    const bool wantDefault = enabled && sketchId == SKETCH_ID_UNSET &&
+                             (!name || name[0] == '\0');
+    if (wantDefault) return true;
+
+    alignas(4) uint8_t buf[CONFIG_WRITE_SIZE];
+    memset(buf, 0xFF, sizeof(buf));
+    memcpy(buf, CONFIG_MAGIC, 4);
+    buf[CFG_OFF_ENABLE] = enabled ? 0xFF : 0x00;
+    buf[CFG_OFF_SKETCH + 0] = (uint8_t)( sketchId        & 0xFF);
+    buf[CFG_OFF_SKETCH + 1] = (uint8_t)((sketchId >>  8) & 0xFF);
+    buf[CFG_OFF_SKETCH + 2] = (uint8_t)((sketchId >> 16) & 0xFF);
+    buf[CFG_OFF_SKETCH + 3] = (uint8_t)((sketchId >> 24) & 0xFF);
+
+    if (name && name[0] != '\0') {
+        uint8_t len = 0;
+        while (name[len] != '\0' && len < MAX_DEVICE_NAME) ++len;
+        buf[CFG_OFF_NAMELEN] = len;
+        memcpy(buf + CFG_OFF_NAMEBUF, name, len);
+    }
+    return (g_flash.program(buf, CONFIG_ADDR, sizeof(buf)) == 0);
+}
 
 bool MiniR4BLERuntimeClass::_readEnableFlag()
 {
-    uint8_t v = 0xFF;
-    if (g_flash.read(&v, ENABLE_FLAG_ADDR, 1) != 0) return true;
-    return v != 0x00;
+    bool enabled; uint32_t sid;
+    (void)_readConfig(enabled, sid, nullptr, 0);
+    return enabled;
 }
 
 uint32_t MiniR4BLERuntimeClass::_readStoredSketchId()
 {
-    alignas(4) uint8_t buf[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-    if (g_flash.read(buf, SKETCH_ID_ADDR, 4) != 0) return SKETCH_ID_UNSET;
-    return (uint32_t)buf[0]
-         | ((uint32_t)buf[1] << 8)
-         | ((uint32_t)buf[2] << 16)
-         | ((uint32_t)buf[3] << 24);
+    bool enabled; uint32_t sid;
+    (void)_readConfig(enabled, sid, nullptr, 0);
+    return sid;
 }
 
 void MiniR4BLERuntimeClass::_writeEnableFlag(bool enabled)
 {
-    // Preserve whatever sketch ID is already stored -- writing block 5 must
-    // never clobber the USB-reflash detector.
-    _writeBlock5(enabled, _readStoredSketchId());
+    // Preserve sketch ID and name -- writing the enable flag must not clobber
+    // either of the other two slices.
+    bool oldEnabled; uint32_t sid; char nameBuf[MAX_DEVICE_NAME + 1] = {0};
+    (void)_readConfig(oldEnabled, sid, nameBuf, sizeof(nameBuf));
+    (void)_writeConfig(enabled, sid, nameBuf[0] ? nameBuf : nullptr);
 }
-
-void MiniR4BLERuntimeClass::_writeBlock5(bool enabled, uint32_t sketchId)
-{
-    // Erase the whole block, then program the enable-flag word + sketch-ID
-    // word in one 8-byte shot. RA4M1 dataflash needs 4-byte-aligned writes.
-    if (g_flash.erase(ENABLE_FLAG_ADDR, DATAFLASH_BLOCK) != 0) return;
-    // Erased flash reads 0xFF everywhere. If we want the "default" state
-    // (enabled + no-ID) we can skip the write entirely.
-    if (enabled && sketchId == SKETCH_ID_UNSET) return;
-
-    alignas(4) uint8_t buf[8];
-    buf[0] = enabled ? 0xFF : 0x00;
-    buf[1] = buf[2] = buf[3] = 0xFF;
-    buf[4] = (uint8_t)( sketchId        & 0xFF);
-    buf[5] = (uint8_t)((sketchId >>  8) & 0xFF);
-    buf[6] = (uint8_t)((sketchId >> 16) & 0xFF);
-    buf[7] = (uint8_t)((sketchId >> 24) & 0xFF);
-    (void)g_flash.program(buf, ENABLE_FLAG_ADDR, sizeof(buf));
-}
-
-// --- Device name storage (block 6) ------------------------------------------
-// A brand-new R4 has no name stored -- the runtime advertises MATRIX-R4-Runtime
-// by default so the IDE finds it out of the box. Renaming persists here so a
-// classroom can have MATRIX-3A-01, MATRIX-3A-02, ... all responding on the
-// same NUS protocol. Names are printable ASCII (0x20..0x7E) up to 24 bytes.
 
 bool MiniR4BLERuntimeClass::_readDeviceName(char* out, size_t maxLen)
 {
     if (!out || maxLen < 2) return false;
-    alignas(4) uint8_t buf[NAME_HEADER_SIZE + MAX_DEVICE_NAME];
-    if (g_flash.read(buf, DEVICE_NAME_ADDR, sizeof(buf)) != 0) return false;
-    for (uint8_t i = 0; i < 4; ++i) {
-        if (buf[i] != DEVICE_NAME_MAGIC[i]) return false;
-    }
-    const uint8_t len = buf[4];
-    if (len == 0 || len > MAX_DEVICE_NAME || len >= maxLen) return false;
-    for (uint8_t i = 0; i < len; ++i) {
-        const uint8_t c = buf[NAME_HEADER_SIZE + i];
-        if (c < 0x20 || c > 0x7E) return false;
-    }
-    memcpy(out, buf + NAME_HEADER_SIZE, len);
-    out[len] = '\0';
-    return true;
+    bool enabled; uint32_t sid;
+    if (!_readConfig(enabled, sid, out, maxLen)) return false;
+    return out[0] != '\0';
 }
 
 bool MiniR4BLERuntimeClass::_writeDeviceName(const char* name)
@@ -483,16 +553,10 @@ bool MiniR4BLERuntimeClass::_writeDeviceName(const char* name)
     // isn't a useful hub name and would defeat the search-all UX.
     if (len == sizeof(PREFIX) - 1) return false;
 
-    if (g_flash.erase(DEVICE_NAME_ADDR, DATAFLASH_BLOCK) != 0) return false;
-
-    // Program header + name padded to a 4-byte boundary.
-    alignas(4) uint8_t buf[NAME_HEADER_SIZE + MAX_DEVICE_NAME + 3];
-    memset(buf, 0xFF, sizeof(buf));
-    memcpy(buf, DEVICE_NAME_MAGIC, 4);
-    buf[4] = len;
-    memcpy(buf + NAME_HEADER_SIZE, name, len);
-    const uint32_t writeSize = ((uint32_t)NAME_HEADER_SIZE + len + 3u) & ~3u;
-    return (g_flash.program(buf, DEVICE_NAME_ADDR, writeSize) == 0);
+    // Preserve enable flag + sketch ID.
+    bool enabled; uint32_t sid; char oldName[MAX_DEVICE_NAME + 1] = {0};
+    (void)_readConfig(enabled, sid, oldName, sizeof(oldName));
+    return _writeConfig(enabled, sid, name);
 }
 
 // --- BLE responses ----------------------------------------------------------
@@ -506,7 +570,11 @@ void MiniR4BLERuntimeClass::_sendAck(uint8_t cmd, uint8_t status)
 void MiniR4BLERuntimeClass::_sendState()
 {
     const uint16_t pc = _vm.pc();
-    uint8_t buf[7] = {
+    const size_t ramRaw = freeRam();
+    const uint16_t ram = ramRaw > 0xFFFF ? 0xFFFF : (uint16_t)ramRaw;
+    // Layout is APPEND-ONLY: older clients read the first 7 bytes and
+    // ignore the trailing freeRam. New clients treat missing bytes as 0.
+    uint8_t buf[9] = {
         RSP_STATE,
         (uint8_t)(_vm.isRunning() ? 1 : 0),
         (uint8_t)(pc & 0xFF),
@@ -514,8 +582,10 @@ void MiniR4BLERuntimeClass::_sendState()
         (uint8_t)_vm.lastError(),
         (uint8_t)(_programSize & 0xFF),
         (uint8_t)((_programSize >> 8) & 0xFF),
+        (uint8_t)(ram & 0xFF),
+        (uint8_t)((ram >> 8) & 0xFF),
     };
-    g_txChar.writeValue(buf, 7);
+    g_txChar.writeValue(buf, 9);
 }
 
 // Telemetry blob for the IDE status panel. Fixed layout so the client can

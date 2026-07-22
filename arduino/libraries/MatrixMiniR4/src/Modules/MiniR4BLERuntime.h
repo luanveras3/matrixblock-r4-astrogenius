@@ -25,18 +25,21 @@
  *
  * Dataflash map:
  *   Block 0     -- reserved for the vEEPROM lib (IMU cal @ 50..73). Untouched.
- *   Block 1..4  -- bytecode program storage (4 KB max).
- *   Block 5     -- runtime state:
- *                    offset 0     : BLE enable flag byte (0xFF=on, 0x00=off).
- *                    offset 1..3  : padding (kept 0xFF).
- *                    offset 4..7  : last-known sketch ID (uint32 LE);
- *                                   0xFFFFFFFF = never set.
- *   Block 6     -- custom BLE local name:
- *                    offset 0..3  : magic 'M','B','R','N' if set.
- *                    offset 4     : length (1..MAX_DEVICE_NAME).
- *                    offset 5..N  : printable ASCII bytes (no null terminator).
- *                  Unset (magic missing) means advertise as MATRIX-R4-Runtime.
- *   Block 7     -- free.
+ *   Block 1..6  -- bytecode program storage (6 KB max).
+ *   Block 7     -- fused config record (single erase-atomic block):
+ *                    offset 0..3   : magic 'M','B','R','C' (presence flag).
+ *                    offset 4      : enable byte (0xFF=on, 0x00=off).
+ *                    offset 5..7   : padding.
+ *                    offset 8..11  : last-known sketch ID (uint32 LE);
+ *                                    0xFFFFFFFF = never set.
+ *                    offset 12     : name length (1..MAX_DEVICE_NAME) or 0xFF.
+ *                    offset 13..15 : padding.
+ *                    offset 16..39 : name ASCII (unused tail = 0xFF).
+ *                  Fresh flash (no MBRC magic) means: enabled + no ID + no name.
+ *   Migration note: firmwares prior to the fused-config revamp kept enable/ID
+ *   in block 5 and name in block 6. On first boot after upgrading, those
+ *   blocks are simply ignored; the hub reverts to defaults for those slices
+ *   until the user re-enables the kill switch or re-names the hub.
  */
 #ifndef MINIR4_BLE_RUNTIME_H
 #define MINIR4_BLE_RUNTIME_H
@@ -135,6 +138,19 @@ public:
     /** @return true while bytecode is executing on the VM. */
     bool isRunningVM() const;
 
+    /**
+     * @brief Free SRAM at the caller's stack frame, in bytes.
+     *
+     * Returns the gap between the current stack pointer and the top of the
+     * heap (`sbrk(0)`). This is the RAM that's still available to grow the
+     * stack or `malloc()` from here on. Static allocations (.bss/.data) are
+     * already deducted, so a decreasing number across boot checkpoints tells
+     * you exactly how much the intervening code cost.
+     *
+     * Diagnostic-only. Cheap enough to call every poll if needed.
+     */
+    static size_t freeRam();
+
     /** @return current value of the persistent BLE enable flag. */
     bool isBLEEnabled() const { return _bleEnabled; }
 
@@ -166,9 +182,13 @@ private:
     bool _readEnableFlag();
     void _writeEnableFlag(bool enabled);
     uint32_t _readStoredSketchId();
-    void _writeBlock5(bool enabled, uint32_t sketchId);
     bool _readDeviceName(char* out, size_t maxLen);
     bool _writeDeviceName(const char* name);
+    // Fused config block (block 7). One erase-atomic record holding all
+    // three persistent slices; every writer rewrites the whole block.
+    bool _readConfig(bool& enabled, uint32_t& sketchId,
+                     char* nameOut, size_t nameOutLen);
+    bool _writeConfig(bool enabled, uint32_t sketchId, const char* name);
 
     MiniR4VM _vm;
     uint16_t _programSize;

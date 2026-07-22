@@ -22,13 +22,34 @@
 
 void setup()
 {
-    MiniR4.begin();
     Serial.begin(115200);
+    // Give the USB serial a moment to come up so the first print isn't lost.
+    // Bounded wait: if nobody's listening we don't want to block boot forever.
+    for (uint32_t t0 = millis(); !Serial && (millis() - t0) < 2000; ) {}
+
+    Serial.print(F("[RAM] pre-MiniR4.begin(): "));
+    Serial.println((unsigned long)MiniR4BLERuntimeClass::freeRam());
+
+    MiniR4.begin();
+    Serial.print(F("[RAM] post-MiniR4.begin(): "));
+    Serial.println((unsigned long)MiniR4BLERuntimeClass::freeRam());
+
     BLERuntime.begin();
+    Serial.print(F("[RAM] post-BLERuntime.begin(): "));
+    Serial.println((unsigned long)MiniR4BLERuntimeClass::freeRam());
 }
 
 void loop()
 {
     BLERuntime.poll();
+    // Periodic RAM probe. Catches slow growth (leaks, fragmentation) that a
+    // one-shot boot-time reading would miss.
+    static uint32_t lastRamPrint = 0;
+    const uint32_t now = millis();
+    if (now - lastRamPrint > 5000) {
+        lastRamPrint = now;
+        Serial.print(F("[RAM] loop: "));
+        Serial.println((unsigned long)MiniR4BLERuntimeClass::freeRam());
+    }
     // No user logic -- this sketch exists only to host the runtime.
 }
