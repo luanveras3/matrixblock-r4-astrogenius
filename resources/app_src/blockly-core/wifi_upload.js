@@ -92,6 +92,14 @@
             saved:           'Saved.',
             saveFail:        'The robot rejected the change.',
             back:            'Back',
+            apPassLabel:     'Robot network password',
+            apPassPh:        'New password (8-63 characters)',
+            saveApPass:      'Save password',
+            apPassHint:      'Password of the robot\'s own network. Empty = back to the default "matrix2026". Takes effect after the robot restarts — reconnect using the new password. Forgot it? Hold BTN_UP + BTN_DOWN while powering on to factory-reset.',
+            rebootBtn:       'Restart robot',
+            factoryBtn:      'Factory reset',
+            factoryConfirm:  'Reset this robot to factory defaults? Name, stored WiFi and network password all go back to default (applies after restart).',
+            rebootSent:      'Restart command sent — the robot is coming back up.',
         },
         'pt-BR': {
             btnLabel:        'Enviar via WiFi',
@@ -140,6 +148,14 @@
             saved:           'Salvo.',
             saveFail:        'O robô recusou a alteração.',
             back:            'Voltar',
+            apPassLabel:     'Senha da rede do robô',
+            apPassPh:        'Nova senha (8-63 caracteres)',
+            saveApPass:      'Salvar senha',
+            apPassHint:      'Senha da rede do próprio robô. Vazio = volta ao padrão "matrix2026". Vale depois de reiniciar o robô — reconecte usando a senha nova. Esqueceu? Segure BTN_UP + BTN_DOWN ao ligar pra restaurar o padrão de fábrica.',
+            rebootBtn:       'Reiniciar robô',
+            factoryBtn:      'Restaurar padrão',
+            factoryConfirm:  'Restaurar este robô ao padrão de fábrica? Nome, WiFi gravado e senha da rede voltam ao padrão (vale após reiniciar).',
+            rebootSent:      'Comando de reinício enviado — o robô já está voltando.',
         },
     };
     function locale() {
@@ -807,7 +823,18 @@
               '</div>' +
               '<div style="font-size:11px;color:#666;">' + tr('wifiHint') + '</div>' +
             '</div>' +
-            '<button id="wifiCfgBack" type="button" style="padding:6px 14px;border:1px solid #64748b;background:#fff;color:#64748b;border-radius:4px;cursor:pointer;">' + tr('back') + '</button>';
+            '<label style="display:block;font-weight:600;font-size:13px;margin-bottom:4px;">' + tr('apPassLabel') + '</label>' +
+            '<div style="display:flex;gap:6px;margin-bottom:2px;">' +
+              '<input id="wifiCfgApPass" type="text" maxlength="63" placeholder="' + tr('apPassPh') + '"' +
+                ' style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font:inherit;" />' +
+              '<button id="wifiCfgApPassSave" type="button" style="padding:6px 12px;border:0;background:#059669;color:#fff;border-radius:4px;cursor:pointer;">' + tr('saveApPass') + '</button>' +
+            '</div>' +
+            '<div style="font-size:11px;color:#666;margin-bottom:12px;">' + tr('apPassHint') + '</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+              '<button id="wifiCfgBack" type="button" style="padding:6px 14px;border:1px solid #64748b;background:#fff;color:#64748b;border-radius:4px;cursor:pointer;">' + tr('back') + '</button>' +
+              '<button id="wifiCfgReboot" type="button" style="padding:6px 14px;border:1px solid #d97706;background:#fff;color:#d97706;border-radius:4px;cursor:pointer;">' + tr('rebootBtn') + '</button>' +
+              '<button id="wifiCfgFactory" type="button" style="padding:6px 14px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:4px;cursor:pointer;">' + tr('factoryBtn') + '</button>' +
+            '</div>';
 
         const ui = modalUi();
         const doCommand = async (cmd, matchCmd) => {
@@ -833,6 +860,18 @@
             const ssid = document.getElementById('wifiCfgSsid').value.trim();
             const pass = document.getElementById('wifiCfgPass').value;
             doCommand({ t: 'setwifi', ssid, pass }, 'setwifi');
+        });
+        document.getElementById('wifiCfgApPassSave').addEventListener('click', () => {
+            const pass = document.getElementById('wifiCfgApPass').value;
+            doCommand({ t: 'setappass', pass }, 'setappass');
+        });
+        document.getElementById('wifiCfgReboot').addEventListener('click', async () => {
+            if (await doCommand({ t: 'reboot' }, 'reboot')) ui.log(tr('rebootSent'), 'ok');
+        });
+        document.getElementById('wifiCfgFactory').addEventListener('click', () => {
+            if (window.confirm(tr('factoryConfirm'))) {
+                doCommand({ t: 'factory' }, 'factory');
+            }
         });
         document.getElementById('wifiCfgBack').addEventListener('click', () => {
             pane.style.display = 'none';

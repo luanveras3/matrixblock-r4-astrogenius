@@ -47,9 +47,13 @@ constexpr uint32_t STA_RETRY_INTERVAL_MS = 30000; ///< re-try cadence in poll()
 //            returns zeros until the WiFi stack is up, so the first boot
 //            reads the real MAC only after begin/beginAP; it is cached here
 //            so every later boot names the AP correctly from the start.
+//   128     AP password length (8..63, 0xFF/invalid = default "matrix2026")
+//   129..191 AP password bytes (63 reserved)
+// Records written before the AP-password extension are 128 bytes; the tail
+// reads back 0xFF (erased) which parses as "default password" — compatible.
 constexpr uint32_t DATAFLASH_BLOCK   = 1024;
 constexpr uint32_t CONFIG_ADDR       = 6 * DATAFLASH_BLOCK;  // block 6
-constexpr uint32_t CONFIG_SIZE       = 128;                  // 4-aligned
+constexpr uint32_t CONFIG_SIZE       = 192;                  // 4-aligned
 constexpr uint8_t  CONFIG_MAGIC[4]   = {'M', 'B', 'R', 'W'};
 constexpr uint8_t  MAX_NAME_LEN      = 24;
 constexpr uint8_t  MAX_SSID_LEN      = 32;
@@ -61,6 +65,10 @@ constexpr uint32_t CFG_OFF_SSID      = 30;
 constexpr uint32_t CFG_OFF_PASSLEN   = 62;
 constexpr uint32_t CFG_OFF_PASS      = 63;
 constexpr uint32_t CFG_OFF_MAC      = 126;
+constexpr uint32_t CFG_OFF_APPASSLEN = 128;
+constexpr uint32_t CFG_OFF_APPASS    = 129;
+constexpr uint8_t  MIN_AP_PASS_LEN   = 8;   // WPA2 minimum
+constexpr uint8_t  MAX_AP_PASS_LEN   = 63;
 
 // Telemetry frame tag — same value as the BLE branch's RSP_TELEMETRY so the
 // IDE-side frame parser is source-agnostic.
@@ -191,6 +199,9 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     _ssid[0] = '\0';
     _pass[0] = '\0';
     _macCache[0] = _macCache[1] = 0xFF;
+    strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
+    _apPass[sizeof(_apPass) - 1] = '\0';
+    _apPassCustom = false;
 }
 
 // --- Public API -------------------------------------------------------------
@@ -205,13 +216,23 @@ void MiniR4WiFiRuntimeClass::begin()
         return;
     }
 
+    // Factory-reset gesture: BOTH buttons held at boot wipes the config
+    // (name, network credentials, AP password, MAC cache). This is the
+    // no-IDE rescue for a hub whose custom AP password was forgotten —
+    // afterwards the AP is MBR4-<mac4> / "matrix2026" again.
+    if (MiniR4.BTN_UP.getState() && MiniR4.BTN_DOWN.getState()) {
+        factoryReset();
+        _oledStatus("RESET OK", "defaults restored");
+        delay(1500);
+    }
+
     _readConfig(_name, _ssid, _pass);
     _fillIdentity();
 
     // Recovery gesture: BTN_UP held at boot => network-only loop, the user
     // sketch never runs. Guarantees a hub with a crashing/blocking sketch
     // can always be re-flashed over the air (manual §2.4 — mandatory).
-    const bool recovery = MiniR4.BTN_UP.getState();
+    const bool recovery = MiniR4.BTN_UP.getState() && !MiniR4.BTN_DOWN.getState();
 
     _startNetwork(recovery);
 
@@ -274,6 +295,41 @@ bool MiniR4WiFiRuntimeClass::setCredentials(const char* ssid, const char* pass)
     _ssid[sizeof(_ssid) - 1] = '\0';
     strncpy(_pass, pass ? pass : "", sizeof(_pass) - 1);
     _pass[sizeof(_pass) - 1] = '\0';
+    return true;
+}
+
+bool MiniR4WiFiRuntimeClass::setAPPassword(const char* pass)
+{
+    if (!pass) return false;
+    const size_t len = strlen(pass);
+    if (len == 0) {
+        // Revert to the default password.
+        _apPassCustom = false;
+        strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
+        _apPass[sizeof(_apPass) - 1] = '\0';
+        return _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
+    }
+    if (len < MIN_AP_PASS_LEN || len > MAX_AP_PASS_LEN) return false;
+    for (size_t i = 0; i < len; i++) {
+        if (pass[i] < 0x20 || pass[i] > 0x7E) return false;
+    }
+    _apPassCustom = true;
+    strncpy(_apPass, pass, sizeof(_apPass) - 1);
+    _apPass[sizeof(_apPass) - 1] = '\0';
+    return _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
+}
+
+bool MiniR4WiFiRuntimeClass::factoryReset()
+{
+    if (g_flash.erase(CONFIG_ADDR, DATAFLASH_BLOCK) != 0) return false;
+    _name[0] = '\0';
+    _nameCustom = false;
+    _ssid[0] = '\0';
+    _pass[0] = '\0';
+    _macCache[0] = _macCache[1] = 0xFF;
+    _apPassCustom = false;
+    strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
+    _apPass[sizeof(_apPass) - 1] = '\0';
     return true;
 }
 
@@ -342,7 +398,7 @@ void MiniR4WiFiRuntimeClass::_refreshMacIdentity()
         delay(500);   // same settle rationale as the failed-STA teardown
         char apName[33];
         apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
-        if (WiFi.beginAP(apName, AP_PASSWORD) == WL_AP_LISTENING) {
+        if (WiFi.beginAP(apName, _apPass) == WL_AP_LISTENING) {
             delay(250);
         } else {
             _netMode = NET_DOWN;   // poll() retries; better down than misnamed
@@ -382,7 +438,7 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
         char apName[33];
         apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
         WIFIRT_TRACE(F("starting fallback AP"));
-        if (WiFi.beginAP(apName, AP_PASSWORD) == WL_AP_LISTENING) {
+        if (WiFi.beginAP(apName, _apPass) == WL_AP_LISTENING) {
             _netMode = NET_AP;
             delay(250);   // let the AP netif settle before binding sockets
         }
@@ -592,6 +648,27 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         // switching networks mid-session would drop this very TCP client.
         _sendJson("{\"t\":\"ack\",\"cmd\":\"setwifi\",\"ok\":%s}",
                   ok ? "true" : "false");
+
+    } else if (!strcmp(type, "setappass")) {
+        // Empty pass = revert to the default "matrix2026". Takes effect on
+        // the next boot; pair with {"t":"reboot"} to apply remotely.
+        char pass[MAX_AP_PASS_LEN + 1];
+        pass[0] = '\0';
+        jsonStr(line, "pass", pass, sizeof(pass));
+        const bool ok = setAPPassword(pass);
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"setappass\",\"ok\":%s}",
+                  ok ? "true" : "false");
+
+    } else if (!strcmp(type, "factory")) {
+        const bool ok = factoryReset();
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"factory\",\"ok\":%s}",
+                  ok ? "true" : "false");
+
+    } else if (!strcmp(type, "reboot")) {
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"reboot\",\"ok\":true}");
+        g_client.flush();
+        delay(150);   // let the ack leave the modem
+        NVIC_SystemReset();
 
     } else if (!strcmp(type, "ota")) {
         char url[160];
@@ -920,6 +997,12 @@ bool MiniR4WiFiRuntimeClass::_readConfig(char* nameOut, char* ssidOut, char* pas
         _macCache[0] = buf[CFG_OFF_MAC];
         _macCache[1] = buf[CFG_OFF_MAC + 1];
     }
+    const uint8_t apLen = buf[CFG_OFF_APPASSLEN];
+    if (apLen >= MIN_AP_PASS_LEN && apLen <= MAX_AP_PASS_LEN) {
+        memcpy(_apPass, buf + CFG_OFF_APPASS, apLen);
+        _apPass[apLen] = '\0';
+        _apPassCustom = true;
+    }
     const uint8_t ssidLen = buf[CFG_OFF_SSIDLEN];
     if (ssidLen >= 1 && ssidLen <= MAX_SSID_LEN) {
         memcpy(ssidOut, buf + CFG_OFF_SSID, ssidLen);
@@ -947,6 +1030,11 @@ bool MiniR4WiFiRuntimeClass::_writeConfig(const char* name, const char* ssid, co
     }
     buf[CFG_OFF_MAC]     = _macCache[0];
     buf[CFG_OFF_MAC + 1] = _macCache[1];
+    if (_apPassCustom) {
+        const size_t apLen = strlen(_apPass);
+        buf[CFG_OFF_APPASSLEN] = (uint8_t)apLen;
+        memcpy(buf + CFG_OFF_APPASS, _apPass, apLen);
+    }
     if (ssid && ssid[0]) {
         const size_t slen = strlen(ssid);
         const size_t plen = pass ? strlen(pass) : 0;

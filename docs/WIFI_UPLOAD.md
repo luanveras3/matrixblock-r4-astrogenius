@@ -46,6 +46,19 @@ is named after it: `<NAME>-xxxx` once renamed (`MBR4-xxxx` before), where
 their robots identically still get distinct networks. A rename reaches the
 AP name on the next power-cycle.
 
+**Robot network password**: the robot's own AP uses `matrix2026` by
+default. Change it per robot in **Settings** (8–63 characters; classroom
+tip: one shared password per team). Empty = back to the default. Password
+changes, renames and the stored network all take effect after a restart —
+use the **Restart robot** button to apply remotely, then reconnect with
+the new password.
+
+**Factory reset**: two ways to return name, stored WiFi and network
+password to defaults: the **Factory reset** button in Settings (asks for
+confirmation, applies after restart), or — with no IDE at all, e.g. a
+forgotten AP password — **hold BTN_UP + BTN_DOWN while powering on** (the
+OLED shows "RESET OK"). USB flashing always remains available regardless.
+
 Notes on the stored network:
 - The SSID field is the network the robot should **join** — it does not
   rename the robot's own `MBR4-xxxx` access point, whose name is fixed.

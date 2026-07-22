@@ -27,7 +27,12 @@ pushed to `feature/wifi-tcp-ota`:
   `{"t":"tm","d":...}`), BTN_UP recovery mode, config in dataflash block 6
   (magic `MBRW`, includes cached MAC at offsets 126..127). AP SSID is
   `<custom name>-<mac4>` (or `MBR4-<mac4>` unnamed). `setwifi` with empty
-  ssid clears stored credentials.
+  ssid clears stored credentials. AP password is configurable
+  (`setappass`, 8..63 chars, empty = default `matrix2026`);
+  `{"t":"reboot"}` restarts the hub remotely; `{"t":"factory"}` wipes the
+  config record — same effect as the no-IDE gesture BTN_UP + BTN_DOWN held
+  at power-on. Config record is 192 bytes (AP password at offsets
+  128..191; older 128-byte records read back as "default password").
 - IDE `resources/app_src/blockly-core/wifi_upload.js` (button, robot picker,
   settings dialog, OTA progress UI, EN + pt-BR) and
   `arduino_wifi_wrapper.js` (wraps every compiled sketch with the runtime;

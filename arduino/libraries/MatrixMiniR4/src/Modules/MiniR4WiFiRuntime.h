@@ -95,6 +95,24 @@ public:
     /** @brief Persist WiFi credentials (ssid 1..32, pass 0..63 chars). */
     bool setCredentials(const char* ssid, const char* pass);
 
+    /**
+     * @brief Persist a custom AP password (8..63 chars, WPA2 minimum).
+     *
+     * Empty string reverts to the default ("matrix2026"). Takes effect on
+     * the next boot — restarting the AP mid-session would drop the very
+     * client that asked for the change.
+     */
+    bool setAPPassword(const char* pass);
+
+    /**
+     * @brief Erase the config record: name, WiFi credentials, AP password
+     * and cached MAC all return to defaults on the next boot.
+     *
+     * Also reachable without the IDE: hold BTN_UP + BTN_DOWN together
+     * while powering on (rescues a hub whose AP password was forgotten).
+     */
+    bool factoryReset();
+
     /** @return true when connected as station or running the fallback AP. */
     bool isNetworkUp() const { return _netMode != NET_DOWN; }
 
@@ -128,6 +146,8 @@ private:
     uint8_t  _macCache[2];         ///< persisted MAC bytes 4..5 (0xFFFF = unset)
     char     _ssid[33];
     char     _pass[64];
+    char     _apPass[64];          ///< effective AP password (default or custom)
+    bool     _apPassCustom;        ///< a user-set AP password exists in flash
     uint32_t _lastStaRetryMs;
 
     // TCP line assembly (commands are small and flat; no ArduinoJson).
