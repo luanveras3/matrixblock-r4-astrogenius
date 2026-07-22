@@ -115,11 +115,14 @@ private:
 
     bool _readConfig(char* nameOut, char* ssidOut, char* passOut);
     bool _writeConfig(const char* name, const char* ssid, const char* pass);
+    void _refreshMacIdentity();
 
     NetMode  _netMode;
     bool     _begun;
+    bool     _nameCustom;          ///< a user-set name exists in flash
     char     _name[25];
     char     _mac4[5];
+    uint8_t  _macCache[2];         ///< persisted MAC bytes 4..5 (0xFFFF = unset)
     char     _ssid[33];
     char     _pass[64];
     uint32_t _lastStaRetryMs;

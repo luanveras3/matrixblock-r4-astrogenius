@@ -47,23 +47,50 @@ re-encode, compare — deterministic encoder, so equality is exact).
 Both far below the 262 144 B ceiling (the BLE branch measured 126 904 B with
 the VM). `MatrixMiniR4 + WiFiS3 + OTAUpdate` fits with ample margin.
 
-## Hardware checklist (requires the hub — not yet run)
+## Hardware checklist — RUN 2026-07-22, ALL PASSED
 
-Procedure for each item is in `docs/poc/OTA_POC/OTA_POC.ino` (compiles clean,
-22% flash). Record results here.
+Hub on COM10, PC joined the robot AP (the *hardest* network case — every
+item below was validated in AP mode, no router involved).
 
-- [ ] **Bridge firmware version**: flash the PoC via USB; it prints
-  `WiFi.firmwareVersion()`. If older than latest, update via Arduino IDE →
-  Firmware Updater (or `arduino-fwuploader`) — OTA commands need a recent
-  modem firmware.
-- [ ] **Plain http:// end-to-end**: `python -m http.server 47800` in a folder
-  with a `.ota` (generate one: `node tools/bin2ota.js blink.bin blink.ota`),
-  then in the Serial Monitor: `u http://<pc-ip>:47800/blink.ota`. Expect
-  download → verify → reboot into blink.
-- [ ] **Timing for ~150 KB sketch**: repeat with a large sketch; the PoC
-  prints per-phase ms. Record download / verify / update times.
-- [ ] **OTA in AP mode**: set `SECRET_SSID ""` (AP mode), join `MBR4-POC`
-  (pass `mbr4poc123`) from the PC, serve the file, use
-  `u http://192.168.4.2:47800/blink.ota` (PC IP on the AP subnet). If the
-  modem cannot download while in AP mode, OTA will require station mode
-  (phone hotspot in the classroom) and AP stays for discovery/telemetry only.
+- [x] **Bridge firmware version**: `WiFi.firmwareVersion()` = **0.6.0** —
+  already >= 0.5.0, no update needed. `startDownload`/`downloadProgress`
+  work out of the box.
+- [x] **Plain http:// end-to-end**: PoC sketch `u http://192.168.4.2:47800/
+  runtime.ota` → download, verify, apply, reboot into the new sketch. The
+  served file was produced by `tools/bin2ota.js` — accepted end-to-end by
+  the real modem (download CRC + verify + LZSS decode), closing the loop on
+  the Fase 1 byte-fidelity work.
+- [x] **Timing (140 KB sketch, 112 KB .ota)**: download **3.8–4.2 s**
+  (~36 KB/s effective — ~900x the BLE branch's 40 B/s), verify **4 ms**,
+  apply+reboot ~15 s. Serial-command-to-robot-back ≈ 25 s; the "click →
+  robot running" budget is dominated by arduino-cli compilation, as the
+  manual predicted.
+- [x] **OTA in AP mode**: fully functional — three consecutive OTA rounds
+  were performed in AP mode (PoC→runtime via serial trigger, then
+  runtime→runtime twice through the real TCP `{"t":"ota"}` product path
+  with live download-% status frames). No station network was ever needed.
+
+Also validated on hardware the same day: UDP discovery replies, TCP
+ping/info/telemetry, 82-byte telemetry frames (tag 0xA2) at a sustained
+**9.0–9.4 Hz** with zero loss when 10 Hz is requested — the synchronous
+modem write path costs ~100 ms per frame round-trip, so true 10 Hz is not
+reachable without batching; note the BLE branch dashboard polls at 5 Hz, so
+this is ~2x the existing UI cadence. Target noted as "9+ Hz sustained".
+
+### Bugs found on hardware and fixed (same day)
+
+1. **`WiFi.macAddress()` returns zeros before the WiFi stack is up** — the
+   first boot advertised `MBR4-0000` (every robot would collide). Fix: MAC
+   is re-queried after the network comes up, cached in the dataflash config
+   record (offsets 126..127), and a misnamed fallback AP is restarted once
+   with the right suffix. Later boots use the cache immediately.
+2. **Telemetry cadence drift** — `_tmLastMs = millis()` after frame build
+   eroded the rate; replaced with catch-up scheduling (+= interval, resync
+   when >1 s behind).
+3. **Windows Firewall (manual risk nº 4, confirmed real)**: the robot-AP
+   network lands on the **Public** profile; the Python that ships as a
+   Windows Store app had no Public inbound rule → `ota.download()` error -6
+   (ServerConnectError). Serving with node.exe (which had Public allow
+   rules) worked instantly. For the IDE this means: the user MUST accept
+   the firewall prompt for the app on first use (already covered in
+   docs/WIFI_UPLOAD.md troubleshooting).

@@ -43,7 +43,10 @@ constexpr uint32_t STA_RETRY_INTERVAL_MS = 30000; ///< re-try cadence in poll()
 //   30..61  ssid bytes   (32 reserved)
 //   62      pass length  (0..63, 0xFF = unset)
 //   63..125 pass bytes   (63 reserved)
-//   126..127 padding
+//   126..127 cached MAC bytes 4..5 (0xFF,0xFF = unset). WiFi.macAddress()
+//            returns zeros until the WiFi stack is up, so the first boot
+//            reads the real MAC only after begin/beginAP; it is cached here
+//            so every later boot names the AP correctly from the start.
 constexpr uint32_t DATAFLASH_BLOCK   = 1024;
 constexpr uint32_t CONFIG_ADDR       = 6 * DATAFLASH_BLOCK;  // block 6
 constexpr uint32_t CONFIG_SIZE       = 128;                  // 4-aligned
@@ -57,6 +60,7 @@ constexpr uint32_t CFG_OFF_SSIDLEN   = 29;
 constexpr uint32_t CFG_OFF_SSID      = 30;
 constexpr uint32_t CFG_OFF_PASSLEN   = 62;
 constexpr uint32_t CFG_OFF_PASS      = 63;
+constexpr uint32_t CFG_OFF_MAC      = 126;
 
 // Telemetry frame tag — same value as the BLE branch's RSP_TELEMETRY so the
 // IDE-side frame parser is source-agnostic.
@@ -173,6 +177,7 @@ MiniR4WiFiRuntimeClass WiFiRuntime;
 MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     : _netMode(NET_DOWN)
     , _begun(false)
+    , _nameCustom(false)
     , _lastStaRetryMs(0)
     , _lineLen(0)
     , _tmOn(false)
@@ -185,6 +190,7 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     _mac4[0] = '\0';
     _ssid[0] = '\0';
     _pass[0] = '\0';
+    _macCache[0] = _macCache[1] = 0xFF;
 }
 
 // --- Public API -------------------------------------------------------------
@@ -253,6 +259,7 @@ bool MiniR4WiFiRuntimeClass::setDeviceName(const char* name)
     if (!_writeConfig(name, _ssid, _pass)) return false;
     strncpy(_name, name, sizeof(_name) - 1);
     _name[sizeof(_name) - 1] = '\0';
+    _nameCustom = true;
     return true;
 }
 
@@ -274,12 +281,54 @@ bool MiniR4WiFiRuntimeClass::setCredentials(const char* ssid, const char* pass)
 
 void MiniR4WiFiRuntimeClass::_fillIdentity()
 {
+    // WiFi.macAddress() answers all-zeros until the stack is up, so prefer
+    // the cached copy from a previous boot; a direct query is only a bonus.
     uint8_t mac[6] = {0};
     WiFi.macAddress(mac);
-    // Last two bytes, hex, upper-case: the "<mac4>" of the default name.
-    snprintf(_mac4, sizeof(_mac4), "%02X%02X", mac[4], mac[5]);
+    if (mac[4] || mac[5]) {
+        _macCache[0] = mac[4];
+        _macCache[1] = mac[5];
+    }
+    if (_macCache[0] == 0xFF && _macCache[1] == 0xFF) {
+        snprintf(_mac4, sizeof(_mac4), "0000");
+    } else {
+        snprintf(_mac4, sizeof(_mac4), "%02X%02X", _macCache[0], _macCache[1]);
+    }
     if (_name[0] == '\0') {
         snprintf(_name, sizeof(_name), "MBR4-%s", _mac4);
+    }
+}
+
+// Called once the network is up (the MAC query is reliable from here on).
+// First boot on a hub: fixes the "MBR4-0000" placeholder identity, persists
+// the MAC to dataflash, and — if the fallback AP is already broadcasting the
+// wrong name — restarts it once with the right one.
+void MiniR4WiFiRuntimeClass::_refreshMacIdentity()
+{
+    uint8_t mac[6] = {0};
+    WiFi.macAddress(mac);
+    if (!mac[4] && !mac[5]) return;   // still not answering; keep placeholder
+
+    char real4[5];
+    snprintf(real4, sizeof(real4), "%02X%02X", mac[4], mac[5]);
+    if (!strcmp(real4, _mac4)) return;   // identity already correct
+
+    _macCache[0] = mac[4];
+    _macCache[1] = mac[5];
+    memcpy(_mac4, real4, sizeof(_mac4));
+    if (!_nameCustom) {
+        snprintf(_name, sizeof(_name), "MBR4-%s", _mac4);
+    }
+    _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
+
+    if (_netMode == NET_AP) {
+        WIFIRT_TRACE(F("restarting AP with real MAC suffix"));
+        WiFi.end();
+        char apName[32];
+        snprintf(apName, sizeof(apName), "MBR4-%s", _mac4);
+        if (WiFi.beginAP(apName, AP_PASSWORD) != WL_AP_LISTENING) {
+            _netMode = NET_DOWN;   // poll() retries; better down than misnamed
+        }
     }
 }
 
@@ -313,6 +362,9 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
         }
     }
 
+    if (_netMode != NET_DOWN) {
+        _refreshMacIdentity();   // may restart a misnamed AP once (first boot)
+    }
     if (_netMode != NET_DOWN) {
         g_udp.begin(UDP_DISCOVERY_PORT);
         g_server.begin();
@@ -394,9 +446,12 @@ void MiniR4WiFiRuntimeClass::_pollDiscovery()
 
 void MiniR4WiFiRuntimeClass::_pollCommands()
 {
-    WiFiClient incoming = g_server.available();
-    if (incoming) {
-        if (!g_client || !g_client.connected()) {
+    // Only look for a new connection when there is no live client: every
+    // g_server.available() call is a full SPI round-trip to the modem, and
+    // doing it on every poll capped telemetry at ~9.4 Hz instead of 10.
+    if (!g_client || !g_client.connected()) {
+        WiFiClient incoming = g_server.available();
+        if (incoming) {
             g_client   = incoming;
             _lineLen   = 0;
             _tmOn      = false;   // stream is opt-in per connection
@@ -591,7 +646,12 @@ void MiniR4WiFiRuntimeClass::_pollTelemetry()
 {
     if (!_tmOn || !g_client || !g_client.connected()) return;
     if (millis() - _tmLastMs < _tmIntervalMs) return;
-    _tmLastMs = millis();
+    // Catch-up scheduling: advance by the interval, not to "now", so the
+    // ~10-15 ms of frame building doesn't erode the rate (measured 8.6 Hz
+    // instead of 10 without this). Resync if we fell hopelessly behind
+    // (e.g. an OTA download monopolised the loop).
+    _tmLastMs += _tmIntervalMs;
+    if (millis() - _tmLastMs > 1000) _tmLastMs = millis();
 
     // ----- frame body: byte-compatible with the BLE branch (see file docs) --
     const uint16_t battMv = (uint16_t)(MiniR4.PWR.getBattVoltage() * 100.0f);
@@ -817,6 +877,11 @@ bool MiniR4WiFiRuntimeClass::_readConfig(char* nameOut, char* ssidOut, char* pas
     if (nameLen >= 1 && nameLen <= MAX_NAME_LEN) {
         memcpy(nameOut, buf + CFG_OFF_NAME, nameLen);
         nameOut[nameLen] = '\0';
+        _nameCustom = true;
+    }
+    if (buf[CFG_OFF_MAC] != 0xFF || buf[CFG_OFF_MAC + 1] != 0xFF) {
+        _macCache[0] = buf[CFG_OFF_MAC];
+        _macCache[1] = buf[CFG_OFF_MAC + 1];
     }
     const uint8_t ssidLen = buf[CFG_OFF_SSIDLEN];
     if (ssidLen >= 1 && ssidLen <= MAX_SSID_LEN) {
@@ -843,6 +908,8 @@ bool MiniR4WiFiRuntimeClass::_writeConfig(const char* name, const char* ssid, co
         buf[CFG_OFF_NAMELEN] = (uint8_t)len;
         memcpy(buf + CFG_OFF_NAME, name, len);
     }
+    buf[CFG_OFF_MAC]     = _macCache[0];
+    buf[CFG_OFF_MAC + 1] = _macCache[1];
     if (ssid && ssid[0]) {
         const size_t slen = strlen(ssid);
         const size_t plen = pass ? strlen(pass) : 0;
