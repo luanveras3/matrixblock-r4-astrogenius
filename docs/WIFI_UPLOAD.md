@@ -42,6 +42,14 @@ Two ways to put them on the same network:
 The default robot name is `MBR4-<4 hex digits>` (unique per hub). Rename it
 in **Settings** — names are stored on the robot itself.
 
+Notes on the stored network:
+- The SSID field is the network the robot should **join** — it does not
+  rename the robot's own `MBR4-xxxx` access point, whose name is fixed.
+- Use the **2.4 GHz** network name; the hub's WiFi module cannot see 5 GHz.
+- With a network stored, every boot spends ~10 s trying to join it before
+  falling back to the AP. To make the robot forget the stored network,
+  save with an **empty SSID**.
+
 ## Recovery mode (un-brick without USB)
 
 If a program with an infinite loop (or a crash) makes the robot unreachable:

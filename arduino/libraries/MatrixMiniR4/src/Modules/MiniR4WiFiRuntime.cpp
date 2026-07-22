@@ -349,6 +349,13 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
             _netMode = NET_STA;
         } else {
             WiFi.end();
+            // Settle before re-configuring the modem: bringing the AP (and
+            // its sockets) up immediately after a failed-STA teardown can
+            // leave the bridge's socket layer wedged — the modem still
+            // answers ping and accepts TCP, but nothing reaches the sketch.
+            // Observed once on hardware (2026-07-22); a short pause between
+            // mode transitions avoids the race.
+            delay(500);
         }
     }
 
@@ -359,6 +366,7 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
         WIFIRT_TRACE(F("starting fallback AP"));
         if (WiFi.beginAP(apName, AP_PASSWORD) == WL_AP_LISTENING) {
             _netMode = NET_AP;
+            delay(250);   // let the AP netif settle before binding sockets
         }
     }
 
@@ -550,7 +558,18 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         pass[0] = '\0';
         bool ok = jsonStr(line, "ssid", ssid, sizeof(ssid));
         jsonStr(line, "pass", pass, sizeof(pass));
-        ok = ok && setCredentials(ssid, pass);
+        if (ok && ssid[0] == '\0') {
+            // Empty SSID = forget the stored network: the hub goes back to
+            // AP-only operation (and stops paying the 10 s STA timeout on
+            // every boot for a network that no longer exists).
+            ok = _writeConfig(_nameCustom ? _name : nullptr, "", "");
+            if (ok) {
+                _ssid[0] = '\0';
+                _pass[0] = '\0';
+            }
+        } else {
+            ok = ok && setCredentials(ssid, pass);
+        }
         // Takes effect on next boot (or next STA retry when currently down);
         // switching networks mid-session would drop this very TCP client.
         _sendJson("{\"t\":\"ack\",\"cmd\":\"setwifi\",\"ok\":%s}",

@@ -84,6 +84,7 @@
             nameLabel:       'Robot name',
             nameHint:        'Up to 24 printable ASCII characters. Shown in the picker.',
             wifiLabel:       'Classroom WiFi (stored on the robot)',
+            wifiHint:        'The school/home network the robot should JOIN (2.4 GHz only) — it does not rename the robot\'s own MBR4-xxxx network, which is fixed. Save with an empty SSID to make the robot forget the stored network.',
             ssidPh:          'Network name (SSID)',
             passPh:          'Password',
             saveName:        'Save name',
@@ -131,6 +132,7 @@
             nameLabel:       'Nome do robô',
             nameHint:        'Até 24 caracteres ASCII. Aparece na lista de robôs.',
             wifiLabel:       'WiFi da sala (fica salvo no robô)',
+            wifiHint:        'A rede da escola/casa em que o robô deve ENTRAR (só 2.4 GHz) — não renomeia a rede MBR4-xxxx do próprio robô, que é fixa. Salvar com SSID vazio faz o robô esquecer a rede.',
             ssidPh:          'Nome da rede (SSID)',
             passPh:          'Senha',
             saveName:        'Salvar nome',
@@ -803,6 +805,7 @@
                   ' style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font:inherit;" />' +
                 '<button id="wifiCfgWifiSave" type="button" style="padding:6px 12px;border:0;background:#059669;color:#fff;border-radius:4px;cursor:pointer;">' + tr('saveWifi') + '</button>' +
               '</div>' +
+              '<div style="font-size:11px;color:#666;">' + tr('wifiHint') + '</div>' +
             '</div>' +
             '<button id="wifiCfgBack" type="button" style="padding:6px 14px;border:1px solid #64748b;background:#fff;color:#64748b;border-radius:4px;cursor:pointer;">' + tr('back') + '</button>';
 
