@@ -36,11 +36,15 @@ Two ways to put them on the same network:
   It joins on next boot. Multiple robots + one IDE on the same network work
   fine — each robot appears in the picker by name.
 - **Robot access point**: with no stored network (or the router missing) the
-  robot opens its own AP named `MBR4-xxxx` (password `matrix2026`). Connect
-  your PC to it and search. Note: your PC loses internet while connected.
+  robot opens its own AP (password `matrix2026`). Connect your PC to it and
+  search. Note: your PC loses internet while connected.
 
 The default robot name is `MBR4-<4 hex digits>` (unique per hub). Rename it
-in **Settings** — names are stored on the robot itself.
+in **Settings** — names are stored on the robot itself. The robot's own AP
+is named after it: `<NAME>-xxxx` once renamed (`MBR4-xxxx` before), where
+`xxxx` is a per-hub MAC suffix that is always kept — two students naming
+their robots identically still get distinct networks. A rename reaches the
+AP name on the next power-cycle.
 
 Notes on the stored network:
 - The SSID field is the network the robot should **join** — it does not

@@ -279,6 +279,21 @@ bool MiniR4WiFiRuntimeClass::setCredentials(const char* ssid, const char* pass)
 
 // --- Network bring-up -------------------------------------------------------
 
+// Fallback-AP SSID: "<custom name>-<mac4>" when the user named the hub,
+// "MBR4-<mac4>" otherwise. The MAC suffix is always kept so two students
+// naming their robots identically can never create colliding networks.
+// A rename takes effect on the SSID at the next power-cycle (restarting
+// the AP mid-session would drop the very client that asked for it).
+static void apSsidFor(const char* name, bool nameCustom, const char* mac4,
+                      char* out, size_t cap)
+{
+    if (nameCustom && name[0]) {
+        snprintf(out, cap, "%s-%s", name, mac4);   // max 24 + 1 + 4 = 29 < 32
+    } else {
+        snprintf(out, cap, "MBR4-%s", mac4);
+    }
+}
+
 void MiniR4WiFiRuntimeClass::_fillIdentity()
 {
     // WiFi.macAddress() answers all-zeros until the stack is up, so prefer
@@ -324,9 +339,12 @@ void MiniR4WiFiRuntimeClass::_refreshMacIdentity()
     if (_netMode == NET_AP) {
         WIFIRT_TRACE(F("restarting AP with real MAC suffix"));
         WiFi.end();
-        char apName[32];
-        snprintf(apName, sizeof(apName), "MBR4-%s", _mac4);
-        if (WiFi.beginAP(apName, AP_PASSWORD) != WL_AP_LISTENING) {
+        delay(500);   // same settle rationale as the failed-STA teardown
+        char apName[33];
+        apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
+        if (WiFi.beginAP(apName, AP_PASSWORD) == WL_AP_LISTENING) {
+            delay(250);
+        } else {
             _netMode = NET_DOWN;   // poll() retries; better down than misnamed
         }
     }
@@ -361,8 +379,8 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
 
     if (_netMode == NET_DOWN) {
         // AP fallback: always available even with no credentials stored.
-        char apName[32];
-        snprintf(apName, sizeof(apName), "MBR4-%s", _mac4);
+        char apName[33];
+        apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
         WIFIRT_TRACE(F("starting fallback AP"));
         if (WiFi.beginAP(apName, AP_PASSWORD) == WL_AP_LISTENING) {
             _netMode = NET_AP;

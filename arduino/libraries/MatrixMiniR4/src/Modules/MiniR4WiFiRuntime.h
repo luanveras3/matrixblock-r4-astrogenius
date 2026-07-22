@@ -22,8 +22,11 @@
  *                          MANUAL_WIFI_TCP_OTA.md §2.2 for the full table.
  *
  * Network bring-up: station mode with the credentials stored in dataflash;
- * falls back to an open-configuration AP `MBR4-<mac4>` (password
- * "matrix2026") when credentials are missing or the join times out.
+ * falls back to a configuration AP when credentials are missing or the join
+ * times out. AP SSID: `<custom name>-<mac4>` when the hub has been named,
+ * `MBR4-<mac4>` otherwise (password "matrix2026" either way) — the MAC
+ * suffix is always kept so identically-named robots can never collide.
+ * Renames reach the SSID on the next power-cycle.
  *
  * Recovery mode (guaranteed un-brick): hold BTN_UP while powering on and
  * begin() never returns — the hub sits in a network-only loop (OLED shows
