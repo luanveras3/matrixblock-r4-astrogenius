@@ -6,6 +6,52 @@ Based on upstream v1.0.8. Format loosely inspired by
 
 ---
 
+## [Unreleased — feature/wifi-tcp-ota] — 2026-07-22
+
+### Added
+- **Send via WiFi (real OTA upload).** New nav button compiles the blocks to
+  a full Arduino sketch (same toolchain as USB) and uploads it wirelessly:
+  the ESP32-S3 modem downloads the `.ota` from an ephemeral HTTP server in
+  the IDE and reflashes the RA4M1 via the official `OTAUpdate` library.
+  Replaces the BLE/bytecode-VM approach (kept on its own branch): 100% block
+  coverage, no 6 KB program ceiling, seconds instead of minutes per upload.
+  - Robot picker (UDP discovery on 47801): name, IP, battery, firmware and
+    AP/station mode; multiple robots on one network are told apart. Fixes at
+    the root the duplicate-name pain documented on the BLE branch.
+  - Per-robot settings dialog: rename the hub and store the classroom WiFi
+    credentials on the robot (`setname` / `setwifi` over TCP 47802, NDJSON).
+  - Live progress (compile / convert / download % / verify / flash) and an
+    automatic single retry. All strings EN + pt-BR.
+- **`MiniR4WiFiRuntime` firmware module** (`src/Modules/`): STA with AP
+  fallback (`MBR4-<mac4>` / `matrix2026`), discovery responder, NDJSON
+  command server, telemetry frames byte-compatible with the BLE branch
+  (base64 inside `{"t":"tm"}`), `safeDelay()` anti-starvation, credentials
+  in dataflash block 6 (magic `MBRW`), and a **BTN_UP recovery mode**
+  ("OTA MODE" on the OLED) that guarantees a hub with a broken sketch can
+  always be reflashed without USB. Example: `examples/7-WiFi Runtime/`.
+  Wrapper injects the runtime into every compiled sketch — USB or WiFi —
+  so the hub stays reachable (`blockly-core/arduino_wifi_wrapper.js`).
+- **`tools/bin2ota.js`**: dependency-free Node port of Arduino's
+  `lzss.c` + `bin2ota.py`. Test suite proves byte-identical output against
+  Arduino's own encoder (official `UNOR4WIFI_Animation.ota` fixture is
+  decoded and re-encoded to equality) plus a second, independent Python
+  transliteration (`tools/lzss_ref.py`).
+- **Docs**: `docs/WIFI_UPLOAD.md` (user guide), `docs/POC_OTA_FINDINGS.md`
+  (Fase 0 findings + hardware checklist), `docs/poc/OTA_POC/` (hardware
+  validation sketch), `tools/stress_upload_wifi.py` (20-round stress tool).
+
+### Changed
+- `patch_asar.js` can now add files that don't exist in the pristine asar
+  (creates header entries), used for the two new `blockly-core/` modules.
+
+### Pending hardware validation
+- Fase 0 checklist in `docs/POC_OTA_FINDINGS.md`: bridge firmware version,
+  plain-HTTP download end-to-end, timing, OTA in AP mode; then the Fase 5
+  acceptance runs (20/20 stress, two-robot picker, recovery-mode rescue,
+  10 min of telemetry).
+
+---
+
 ## [v3.4.1-hotfix] — 2026-07-16
 
 ### Fixed
