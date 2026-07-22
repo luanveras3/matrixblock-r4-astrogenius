@@ -37,16 +37,24 @@
 !tools/fixtures/blink.bin
 !tools/fixtures/UNOR4WIFI_Animation.ota
 
-# WiFi runtime firmware module (delta over the stock MatrixMiniR4 lib)
+# WiFi runtime firmware module (delta over the stock MatrixMiniR4 lib).
+# Each level re-ignores its children so un-ignoring a directory does not
+# drag the whole stock library (a full copy lives untracked in the tree).
 !arduino/libraries/
+arduino/libraries/*
 !arduino/libraries/MatrixMiniR4/
+arduino/libraries/MatrixMiniR4/*
 !arduino/libraries/MatrixMiniR4/src/
+arduino/libraries/MatrixMiniR4/src/*
 !arduino/libraries/MatrixMiniR4/src/Modules/
+arduino/libraries/MatrixMiniR4/src/Modules/*
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.h
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.cpp
 !arduino/libraries/MatrixMiniR4/examples/
-!arduino/libraries/MatrixMiniR4/examples/7-WiFi*/
-!arduino/libraries/MatrixMiniR4/examples/7-WiFi*/**
+arduino/libraries/MatrixMiniR4/examples/*
+!arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/
+!arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**
+arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**/.build/
 
 # GitHub Actions
 !.github/
