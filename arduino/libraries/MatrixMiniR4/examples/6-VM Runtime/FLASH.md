@@ -105,8 +105,8 @@ Almost every failure I've seen falls into one of these:
 
 ## Program size limits (BLE upload path)
 
-The BLE runtime persists uploaded bytecode to dataflash blocks 1..4, which
-caps a single upload at **4096 bytes**. `CMD_START` refuses anything
+The BLE runtime persists uploaded bytecode to dataflash blocks 1..6, which
+caps a single upload at **6144 bytes**. `CMD_START` refuses anything
 larger. Rough sizes per Blockly block:
 
 | Pattern                          | Bytes    |
@@ -122,24 +122,26 @@ larger. Rough sizes per Blockly block:
 Rule of thumb: **~10 bytes per block**. Practical ceiling:
 
 - 200 blocks ≈ 2 KB — fits easily
-- 400 blocks ≈ 4 KB — approaching the wall
+- 600 blocks ≈ 6 KB — approaching the wall
 - 1000 blocks ≈ 10 KB — refused at CMD_START
 
 Competition programs hit this earlier because they duplicate mission
-patterns. Two levers exist but are **not yet implemented**:
+patterns. Both easy levers are now landed:
 
-1. **`procedures_*` blocks (My Blocks)** — wire the 4 procedure blocks
-   to the existing `CALL` / `RET` opcodes so students can extract
-   `alinha_linha`, `vai_ate_marca`, etc. Typical competition workspace
-   shrinks 30-50 % because repeated mission code becomes one
-   subroutine. Highest ROI lever. Estimated 4-6 h to implement (symbol
-   table + args + local var slots).
-2. **Grow `MAX_PROGRAM` to 5 KB** — the free dataflash block 7 (or a
-   reshuffle of blocks 5-6) buys +1 KB. Only ~25 % headroom on its own;
-   pairs well with (1) but doesn't fix the root duplication problem.
+1. **`procedures_*` blocks (My Blocks)** — DONE (feat 457f3a3, 2026-07-19).
+   Procedure blocks compile to `CALL`/`RET`; typical competition workspace
+   shrinks 30-50 % because repeated mission code becomes one subroutine.
+2. **Grew `MAX_PROGRAM` to 6 KB** — DONE. Fused enable-flag + sketch-ID +
+   device-name into a single "MBRC" config record in block 7, freeing
+   blocks 5+6 for bytecode. +50 % headroom (4 KB → 6 KB). Migration cost:
+   hubs updated from an older firmware lose their custom BLE name and
+   kill-switch state on first boot; kill switch reverts to enabled by
+   default, and the hub re-advertises as `MATRIX-R4-Runtime` until
+   renamed.
 
-For now, if a workspace hits the ceiling, USB compile still works
-(no 4 KB limit there — the sketch just gets bigger).
+If a workspace still won't fit after both levers, the remaining paths are
+bytecode compression in the IDE (constant pool, short jumps) or a
+RAM-only "test mode" that skips persistence entirely.
 
 ## The wrapper vs this standalone sketch
 
