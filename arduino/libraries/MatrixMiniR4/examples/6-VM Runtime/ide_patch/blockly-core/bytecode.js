@@ -29,6 +29,12 @@ goog.require('Blockly.Generator');
 
 Blockly.BytecodeVM = new Blockly.Generator('BytecodeVM');
 
+// Maximum bytecode size the runtime accepts (mirrors MAX_PROGRAM in
+// src/Modules/MiniR4BLERuntime.cpp). Single source of truth for the
+// IDE; other modules (ble_upload.js size bar + fallback modal) read
+// this instead of hard-coding.
+Blockly.BytecodeVM.MAX_PROGRAM_BYTES = 6144;
+
 // --- Precedence (all atomic; every value block returns a stack push) --------
 Blockly.BytecodeVM.ORDER_ATOMIC = 0;
 Blockly.BytecodeVM.ORDER_NONE = 99;
@@ -296,10 +302,14 @@ Blockly.BytecodeVM._assemble = function (text) {
         }
     }
 
-    if (bytes.length > 6144) {
-        throw new Error(
-            'Bytecode is ' + bytes.length + ' bytes; dataflash only holds 6144.'
+    if (bytes.length > Blockly.BytecodeVM.MAX_PROGRAM_BYTES) {
+        const err = new Error(
+            'Bytecode is ' + bytes.length + ' bytes; dataflash only holds ' +
+            Blockly.BytecodeVM.MAX_PROGRAM_BYTES + '.'
         );
+        err.byteSize = bytes.length;
+        err.overCap  = true;
+        throw err;
     }
 
     return new Uint8Array(bytes);

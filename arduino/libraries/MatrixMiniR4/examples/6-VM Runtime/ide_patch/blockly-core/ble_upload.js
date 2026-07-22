@@ -116,6 +116,19 @@
             sbPirMotion:    'MOTION',
             sbPirIdle:      'idle',
             sbColorNa:      'no reading',
+            // --- Program-size bar + BLE/USB fallback (2026-07-21) ---
+            sizeBarPrefix:  'Program:',
+            sizeBarBlocks:  '%d blocks',
+            sizeBarBytes:   '%d / %d B',
+            sizeBarOkBLE:   'BLE ok',
+            sizeBarNeedUSB: 'USB required',
+            sizeBarErr:     'compile error',
+            sizeBarEmpty:   'empty',
+            overModalTitle: 'Program too big for BLE',
+            overModalBody:  'Your program compiled to %d bytes (%d blocks). BLE upload accepts up to %d bytes. Compile and upload over USB instead (cable required).',
+            overModalCancel:'Cancel',
+            overModalUsb:   'Compile via USB',
+            overNoUsbBtn:   'USB upload button not found in this IDE build.',
         },
         'pt-BR': {
             connect:        'Conectar',
@@ -215,6 +228,19 @@
             sbPirMotion:    'MOVIMENTO',
             sbPirIdle:      'parado',
             sbColorNa:      'sem leitura',
+            // --- Barra de tamanho do programa + fallback BLE/USB (2026-07-21) ---
+            sizeBarPrefix:  'Programa:',
+            sizeBarBlocks:  '%d blocos',
+            sizeBarBytes:   '%d / %d B',
+            sizeBarOkBLE:   'BLE ok',
+            sizeBarNeedUSB: 'USB necessario',
+            sizeBarErr:     'erro ao compilar',
+            sizeBarEmpty:   'vazio',
+            overModalTitle: 'Programa grande demais para BLE',
+            overModalBody:  'Seu programa compilou para %d bytes (%d blocos). O upload por BLE aceita ate %d bytes. Compile e envie por USB (cabo conectado).',
+            overModalCancel:'Cancelar',
+            overModalUsb:   'Compilar por USB',
+            overNoUsbBtn:   'Botao de upload USB nao encontrado nesta versao do IDE.',
         },
     };
     function locale() {
@@ -229,6 +255,300 @@
         const args = Array.prototype.slice.call(arguments, 1);
         let i = 0;
         return t.replace(/%[ds]/g, () => (args[i++] !== undefined ? args[i - 1] : ''));
+    }
+
+    // --- Program-size bar + BLE/USB fallback ---------------------------------
+    // The bar lives fixed at the bottom of the viewport so the student always
+    // sees whether their current workspace still fits under the BLE ceiling.
+    // When compilation exceeds MAX_PROGRAM_BYTES, the assembler throws an
+    // error tagged with .overCap and .byteSize so we can display the real
+    // size instead of just "compile error".
+
+    function maxProgramBytes() {
+        // Read from bytecode.js if loaded; fall back to hard-coded 6144 so
+        // early boot doesn't crash the bar before generators mount.
+        try {
+            if (Blockly && Blockly.BytecodeVM &&
+                typeof Blockly.BytecodeVM.MAX_PROGRAM_BYTES === 'number') {
+                return Blockly.BytecodeVM.MAX_PROGRAM_BYTES;
+            }
+        } catch (e) {}
+        return 6144;
+    }
+
+    // Compile the current workspace without raising to the caller. Returns a
+    // uniform shape so the size bar and the send button share the same info.
+    function safeCompile(workspace) {
+        if (!workspace || !Blockly.BytecodeVM ||
+            typeof Blockly.BytecodeVM.compile !== 'function') {
+            return { ready: false };
+        }
+        if (workspace.getTopBlocks().length === 0) {
+            return { ready: true, empty: true, blockCount: 0, byteSize: 0 };
+        }
+        const blockCount = workspace.getAllBlocks
+            ? workspace.getAllBlocks(false).length : 0;
+        try {
+            const c = Blockly.BytecodeVM.compile(workspace);
+            return {
+                ready: true, empty: false, error: false,
+                blockCount: blockCount,
+                byteSize:   c.bytes ? c.bytes.length : 0,
+                bytes:      c.bytes,
+                warnings:   c.warnings || [],
+                variables:  c.variables || {},
+                overCap:    false,
+            };
+        } catch (e) {
+            // Assembler threw. If it tagged the error with overCap we still
+            // know the real byte size and can render the bar honestly.
+            if (e && e.overCap) {
+                return {
+                    ready: true, empty: false, error: false,
+                    blockCount: blockCount,
+                    byteSize:   e.byteSize || 0,
+                    overCap:    true,
+                };
+            }
+            return {
+                ready: true, empty: false, error: true,
+                blockCount: blockCount,
+                byteSize: 0,
+                errorMsg: (e && e.message) || String(e),
+            };
+        }
+    }
+
+    let sizeBarEl      = null;
+    let sizeBarLastKey = '';   // dedupe redundant DOM writes
+    const FOOTER_HEIGHT_PX = 28;
+
+    // Reserve real estate at the bottom of the viewport so the size bar isn't
+    // an overlay. Shrinks body + .mainContainer by FOOTER_HEIGHT_PX so Blockly
+    // + dropdowns + modals all live above the bar instead of under it. Runs
+    // once; safe to call multiple times (idempotent via id lookup).
+    function injectFooterReserveCss() {
+        if (document.getElementById('bleFooterReserveStyle')) return;
+        const style = document.createElement('style');
+        style.id = 'bleFooterReserveStyle';
+        style.textContent = [
+            // Baseline: viewport is exactly 100vh, no scroll leak.
+            'html, body { height:100vh; margin:0; padding:0; overflow:hidden; }',
+            // Shrink the app's outer container by the footer height. Cover
+            // both plausible sizings (max-height + height) since we don\'t
+            // own the app CSS.
+            '.mainContainer {' +
+              ' max-height:calc(100vh - ' + FOOTER_HEIGHT_PX + 'px) !important;' +
+              ' height:calc(100vh - ' + FOOTER_HEIGHT_PX + 'px) !important;' +
+            ' }',
+            // .content-Div is positioned absolute against the viewport (top:85
+            // bottom:0). Shrinking .mainContainer doesn\'t reach it because
+            // it has no positioned ancestor. Move its bottom edge up so the
+            // Blockly canvas + side panels (Serial/console) stop above the
+            // footer instead of extending underneath.
+            '.content-Div { bottom:' + FOOTER_HEIGHT_PX + 'px !important; }',
+            // Constrain full-viewport overlays so they stop above the bar.
+            // Covers Bootstrap 5 modals + backdrops + SweetAlert2 containers.
+            '.modal, .modal-backdrop, .swal2-container {' +
+              ' bottom:' + FOOTER_HEIGHT_PX + 'px !important;' +
+            ' }',
+        ].join('\n');
+        document.head.appendChild(style);
+    }
+
+    // Nudge Blockly to recompute its SVG canvas size + let any listeners
+    // reflow after we shrink the viewport. Safe to call before Blockly is
+    // ready -- it's a no-op then.
+    function nudgeResize() {
+        try {
+            if (Blockly && typeof Blockly.svgResize === 'function') {
+                const ws = Blockly.getMainWorkspace
+                    ? Blockly.getMainWorkspace() : Blockly.mainWorkspace;
+                if (ws) Blockly.svgResize(ws);
+            }
+        } catch (e) {}
+        try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+    }
+
+    function createSizeBar() {
+        if (sizeBarEl) return sizeBarEl;
+        injectFooterReserveCss();
+        sizeBarEl = document.createElement('div');
+        sizeBarEl.id = 'bleSizeBar';
+        // Fixed at bottom, but the reserved 28 px of body padding means the
+        // app content stops just above -- so this is real estate now, not an
+        // overlay. Inline styles so we don't depend on external CSS.
+        sizeBarEl.style.cssText = [
+            'position:fixed', 'left:0', 'right:0', 'bottom:0',
+            'height:' + FOOTER_HEIGHT_PX + 'px',
+            'z-index:2147483000',
+            'padding:0 12px', 'box-sizing:border-box',
+            'font:12px/1 system-ui, -apple-system, "Segoe UI", sans-serif',
+            'color:#e2e8f0',
+            'background:#0f172a',
+            'border-top:1px solid rgba(148,163,184,0.25)',
+            'display:flex', 'gap:12px', 'align-items:center',
+        ].join(';');
+        document.body.appendChild(sizeBarEl);
+        // Give the app a beat to notice its viewport shrank.
+        setTimeout(nudgeResize, 50);
+        setTimeout(nudgeResize, 500);
+        return sizeBarEl;
+    }
+
+    function updateSizeBar() {
+        const bar = createSizeBar();
+        const ws  = Blockly.getMainWorkspace
+            ? Blockly.getMainWorkspace() : Blockly.mainWorkspace;
+        const info = safeCompile(ws);
+        if (!info.ready) return;
+
+        const max = maxProgramBytes();
+        let status, color, key;
+        if (info.empty) {
+            status = tr('sizeBarEmpty'); color = '#94a3b8';
+            key = 'empty';
+        } else if (info.error) {
+            status = tr('sizeBarErr');   color = '#f87171';
+            key = 'err:' + info.errorMsg;
+        } else if (info.overCap) {
+            status = tr('sizeBarNeedUSB'); color = '#fbbf24';
+            key = 'usb:' + info.byteSize + ':' + info.blockCount;
+        } else {
+            status = tr('sizeBarOkBLE');  color = '#4ade80';
+            key = 'ble:' + info.byteSize + ':' + info.blockCount;
+        }
+        if (key === sizeBarLastKey) return;
+        sizeBarLastKey = key;
+
+        bar.innerHTML = '';
+        const label = document.createElement('span');
+        label.textContent = tr('sizeBarPrefix');
+        label.style.opacity = '0.75';
+        bar.appendChild(label);
+
+        if (!info.empty) {
+            const blocks = document.createElement('span');
+            blocks.textContent = fmt(tr('sizeBarBlocks'), info.blockCount);
+            bar.appendChild(blocks);
+
+            const bytes = document.createElement('span');
+            bytes.textContent = fmt(tr('sizeBarBytes'), info.byteSize, max);
+            bar.appendChild(bytes);
+        }
+
+        const badge = document.createElement('span');
+        badge.textContent = status;
+        badge.style.cssText = [
+            'margin-left:auto',
+            'padding:1px 8px',
+            'border-radius:10px',
+            'background:' + color + '20',
+            'color:' + color,
+            'font-weight:600',
+        ].join(';');
+        bar.appendChild(badge);
+    }
+
+    // Debounced worker so a drag storm doesn't compile 60x per second.
+    let sizeBarTimer = 0;
+    function scheduleSizeBarUpdate() {
+        if (sizeBarTimer) return;
+        sizeBarTimer = setTimeout(() => {
+            sizeBarTimer = 0;
+            try { updateSizeBar(); }
+            catch (e) { console.error('[BLE] size bar update failed:', e); }
+        }, 250);
+    }
+
+    // Attach a workspace change listener. Retries because Blockly.mainWorkspace
+    // can be null during early app boot.
+    let sizeBarWatcherAttached = false;
+    function attachSizeBarWatcher() {
+        if (sizeBarWatcherAttached) return;
+        const ws = Blockly.getMainWorkspace
+            ? Blockly.getMainWorkspace() : Blockly.mainWorkspace;
+        if (!ws || typeof ws.addChangeListener !== 'function') return;
+        ws.addChangeListener(() => scheduleSizeBarUpdate());
+        sizeBarWatcherAttached = true;
+        // First paint so the bar isn't blank until the student edits something.
+        scheduleSizeBarUpdate();
+    }
+
+    // Fallback modal shown when the user hits "Send via BLE" with a program
+    // over the BLE cap. Offers a one-click route into the existing USB
+    // compile+upload flow (whose button lives in the closed app.compressed.js).
+    function showOverCapModal(info) {
+        const max = maxProgramBytes();
+        // Backdrop
+        const back = document.createElement('div');
+        back.id = 'bleOverCapModalBack';
+        back.style.cssText = [
+            'position:fixed', 'inset:0', 'z-index:2147483100',
+            'background:rgba(15,23,42,0.65)',
+            'display:flex', 'align-items:center', 'justify-content:center',
+        ].join(';');
+        const box = document.createElement('div');
+        box.style.cssText = [
+            'background:#0f172a', 'color:#e2e8f0',
+            'border:1px solid rgba(148,163,184,0.35)',
+            'border-radius:12px',
+            'padding:20px 24px',
+            'max-width:480px',
+            'font:14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif',
+            'box-shadow:0 20px 40px rgba(0,0,0,0.5)',
+        ].join(';');
+
+        const title = document.createElement('div');
+        title.textContent = tr('overModalTitle');
+        title.style.cssText = 'font-size:16px;font-weight:700;margin-bottom:12px;color:#fbbf24';
+        box.appendChild(title);
+
+        const body = document.createElement('div');
+        body.textContent = fmt(tr('overModalBody'), info.byteSize, info.blockCount, max);
+        box.appendChild(body);
+
+        const row = document.createElement('div');
+        row.style.cssText = 'margin-top:20px;display:flex;gap:8px;justify-content:flex-end';
+
+        const cancel = document.createElement('button');
+        cancel.textContent = tr('overModalCancel');
+        cancel.style.cssText = [
+            'padding:6px 14px', 'border-radius:6px',
+            'background:transparent', 'color:#e2e8f0',
+            'border:1px solid rgba(148,163,184,0.4)', 'cursor:pointer',
+        ].join(';');
+        cancel.addEventListener('click', () => document.body.removeChild(back));
+
+        const usb = document.createElement('button');
+        usb.textContent = tr('overModalUsb');
+        usb.style.cssText = [
+            'padding:6px 14px', 'border-radius:6px',
+            'background:#2563eb', 'color:#ffffff',
+            'border:1px solid #2563eb', 'cursor:pointer', 'font-weight:600',
+        ].join(';');
+        usb.addEventListener('click', () => {
+            document.body.removeChild(back);
+            // Fire the existing USB compile+upload button. It's an <a> in
+            // main.html registered by the closed app.compressed.js; a synthetic
+            // click reaches the same handler as a human click.
+            const uploadLink = document.getElementById('uploadNavLink');
+            if (uploadLink) {
+                uploadLink.click();
+            } else {
+                log(tr('overNoUsbBtn'), 'error');
+            }
+        });
+
+        row.appendChild(cancel);
+        row.appendChild(usb);
+        box.appendChild(row);
+        back.appendChild(box);
+        // Click on backdrop (not the box) also cancels.
+        back.addEventListener('click', (ev) => {
+            if (ev.target === back) document.body.removeChild(back);
+        });
+        document.body.appendChild(back);
     }
 
     // --- Protocol constants (must match MiniR4_BLE_Runtime.ino) --------------
@@ -1888,6 +2208,16 @@
             try {
                 compiled = Blockly.BytecodeVM.compile(workspace);
             } catch (e) {
+                // Over-cap is a first-class outcome, not an error: offer the
+                // USB fallback instead of just logging a compile failure.
+                if (e && e.overCap) {
+                    const blockCount = workspace.getAllBlocks
+                        ? workspace.getAllBlocks(false).length : 0;
+                    log(fmt(tr('compileFail'), e.message), 'error');
+                    showOverCapModal({ byteSize: e.byteSize || 0,
+                                       blockCount: blockCount });
+                    return;
+                }
                 log(fmt(tr('compileFail'), e.message), 'error');
                 return;
             }
@@ -2188,8 +2518,16 @@
         let tries = 0;
         const iv = setInterval(() => {
             refreshAllLabels();
+            // Also nudge the size bar so a language flip repaints the badge.
+            scheduleSizeBarUpdate();
             if (++tries > 10) clearInterval(iv);
         }, 500);
+
+        // Program-size bar: create the DOM once, then attempt to attach the
+        // workspace change listener. Blockly may not be ready yet -- installer
+        // retries below handle that.
+        createSizeBar();
+        attachSizeBarWatcher();
     }
 
     console.log('[BLE] ble_upload.js module loaded (v3 connect+send)');
