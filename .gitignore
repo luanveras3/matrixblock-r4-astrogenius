@@ -65,3 +65,10 @@ arduino/blocks_examples/zh-tw/
 
 # arduino-cli build output produced by flash.ps1 -- do not commit
 arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/.build/
+
+# --- BLE stress-test / diagnostics scripts (2026-07-21 session) ---
+# Python tooling used to characterize the BLE upload path and RAM
+# ceiling. Not needed at runtime; kept versioned so future ceiling
+# changes can be re-verified with the same instruments.
+!tools/
+!tools/*.py
