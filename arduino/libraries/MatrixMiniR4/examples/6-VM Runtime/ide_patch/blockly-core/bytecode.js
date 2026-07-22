@@ -296,9 +296,9 @@ Blockly.BytecodeVM._assemble = function (text) {
         }
     }
 
-    if (bytes.length > 4096) {
+    if (bytes.length > 6144) {
         throw new Error(
-            'Bytecode is ' + bytes.length + ' bytes; dataflash only holds 4096.'
+            'Bytecode is ' + bytes.length + ' bytes; dataflash only holds 6144.'
         );
     }
 

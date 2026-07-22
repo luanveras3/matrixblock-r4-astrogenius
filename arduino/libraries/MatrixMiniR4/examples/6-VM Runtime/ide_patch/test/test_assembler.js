@@ -105,9 +105,9 @@ assertEq(threw, true, 'unresolved label throws');
 threw = false;
 try {
     let big = '';
-    for (let i = 0; i < 4100; i++) big += '00 ';
+    for (let i = 0; i < 6200; i++) big += '00 ';
     G._assemble(big);
-} catch (e) { threw = /4096/.test(e.message); }
+} catch (e) { threw = /6144/.test(e.message); }
 assertEq(threw, true, 'oversized program throws');
 
 // ---- Test 7: end-to-end program shape (LED blink 5x, control_repeat pattern)
