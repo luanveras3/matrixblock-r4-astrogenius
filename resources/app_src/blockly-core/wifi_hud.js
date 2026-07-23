@@ -1109,7 +1109,34 @@
         return robots[0];
     }
 
+    // Pause/resume: the runtime accepts one TCP client at a time; when the
+    // upload flow or settings dialog needs the socket, the HUD has to let
+    // go. wifi_upload.js awaits MBR4Hud.pause() before every RobotClient
+    // it opens and calls resume() when done. Without this, "Send via WiFi"
+    // and "Save name" fail with connect timeout because we're squatting
+    // on the only slot.
+    let hudPaused = false;
+    function pauseHud() {
+        hudPaused = true;
+        clearTimeout(reconnectTimer);
+        if (hudClient) { try { hudClient.close(); } catch (_) {} hudClient = null; }
+        hudConnected = false;
+        setHudAwaiting(true);
+        // Give the modem 250 ms to notice the FIN and release the accept
+        // slot before the caller tries to open its own socket. Empirical
+        // — shorter races the runtime's poll cadence occasionally.
+        return new Promise((r) => setTimeout(r, 250));
+    }
+    function resumeHud() {
+        if (!hudPaused) return;
+        hudPaused = false;
+        // Small delay lets any lingering caller-side socket close cleanly
+        // before we re-attach.
+        reconnectTimer = setTimeout(connectLoop, 800);
+    }
+
     async function connectLoop() {
+        if (hudPaused) return;
         clearTimeout(reconnectTimer);
         if (hudClient) { try { hudClient.close(); } catch (_) {} hudClient = null; }
         setHudAwaiting(true);
@@ -1294,11 +1321,14 @@
     setTimeout(boot, 3000);
     setTimeout(boot, 5000);
 
-    // Exposed for e2e tests.
+    // Exposed for e2e tests and for wifi_upload.js coordination.
     window.MBR4Hud = {
+        pause:  pauseHud,     // await this before opening your own RobotClient
+        resume: resumeHud,    // call this when done — HUD auto-reconnects
         _parseTelemetryFrame: parseTelemetryFrame,
-        _mounted: () => hudMounted,
-        _connected: () => hudConnected,
+        _mounted:  () => hudMounted,
+        _connected:() => hudConnected,
+        _paused:   () => hudPaused,
         _openPicker: openHudPicker,
     };
 })();

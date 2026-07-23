@@ -625,6 +625,11 @@
     async function sendViaWiFi(robot, ui) {
         if (busy) return;
         busy = true;
+        // Runtime is single-client: the HUD (if connected) is holding the
+        // only TCP slot. Ask it to yield until this upload finishes; the
+        // HUD auto-reconnects after resume(). Skipping this makes every
+        // upload fail with "connect timeout" while the HUD is running.
+        if (window.MBR4Hud) await window.MBR4Hud.pause();
         try {
             try {
                 await uploadTo(robot, ui);
@@ -639,6 +644,7 @@
             ui.log((e && e.message) || String(e), 'error');
         } finally {
             busy = false;
+            if (window.MBR4Hud) window.MBR4Hud.resume();
         }
     }
 
@@ -838,6 +844,12 @@
 
         const ui = modalUi();
         const doCommand = async (cmd, matchCmd) => {
+            // Same single-client contract as sendViaWiFi: the HUD has to
+            // release its TCP slot before we can save name/wifi/appPass or
+            // send factory/reboot commands. For reboot in particular the
+            // robot will drop everything anyway, and the HUD will
+            // rediscover after resume().
+            if (window.MBR4Hud) await window.MBR4Hud.pause();
             const client = new RobotClient(robot.ip);
             try {
                 await client.connect(4000);
@@ -850,6 +862,7 @@
                 return false;
             } finally {
                 client.close();
+                if (window.MBR4Hud) window.MBR4Hud.resume();
             }
         };
         document.getElementById('wifiCfgNameSave').addEventListener('click', async () => {
