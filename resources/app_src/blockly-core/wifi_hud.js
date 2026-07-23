@@ -782,10 +782,14 @@
         if (!list) return;
         const line = document.createElement('div');
         line.textContent = entry.msg;
+        // 'robot' = remote-console line (R3); rendered in the amber accent
+        // used by the VM path so students associate it with "the robot said".
+        const color = entry.kind === 'error' ? '#c62828'
+                    : entry.kind === 'ok'    ? BRAND_TEAL
+                    : entry.kind === 'robot' ? '#b45309'
+                    :                          '#4a4a4a';
         line.style.cssText = 'padding:1px 0;white-space:pre-wrap;word-break:break-word;' +
-            (entry.kind === 'error' ? 'color:#c62828;'
-             : entry.kind === 'ok' ? 'color:' + BRAND_TEAL + ';'
-             : 'color:#4a4a4a;');
+            'color:' + color + ';';
         list.appendChild(line);
         while (list.childElementCount > LOG_MAX) list.removeChild(list.firstChild);
         if (activePane === 'log') logDiv.scrollTop = logDiv.scrollHeight;
@@ -1219,6 +1223,12 @@
             if (o.t === 'tm' && o.d) {
                 const t = parseTelemetryFrame(o.d);
                 if (t) updateHud(t);
+            } else if (o.t === 'log' && typeof o.s === 'string') {
+                // R3 — remote console. Robot-side prints (Serial.println,
+                // WiFiRuntime.log calls, VM start/halt events) land in the
+                // Log tab with a leading '>' marker so they're visually
+                // distinct from our own [HUD] status lines.
+                appendLogLine({ msg: '> ' + o.s, kind: 'robot', ts: Date.now() });
             }
         };
         // Ask for the stream + push initial DHT mask (opt-in ports only).
@@ -1347,5 +1357,16 @@
         _connected:() => hudConnected,
         _paused:   () => hudPaused,
         _openPicker: openHudPicker,
+        // Test/tools hook: send a raw NDJSON object through the HUD's own
+        // socket. Silently drops if the HUD isn't connected. Used by
+        // r3_hud_probe (echo command) and available for any diagnostic
+        // script that wants to reuse the live connection instead of
+        // fighting for the single-client TCP slot.
+        _send: (obj) => {
+            if (hudClient && hudConnected) {
+                try { hudClient.send(obj); return true; } catch (_) {}
+            }
+            return false;
+        },
     };
 })();

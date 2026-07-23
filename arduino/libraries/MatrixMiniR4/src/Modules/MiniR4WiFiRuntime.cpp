@@ -158,15 +158,19 @@ bool jsonBool(const char* json, const char* key, bool& val)
 
 // JSON-escape a string for embedding in an outgoing frame (names may contain
 // quotes; keep the output valid no matter what is stored in flash).
+// Control characters (< 0x20) are dropped so a stray \r or NUL in a user
+// log message can't break the receiver's line-by-line NDJSON parse.
 void jsonEscape(const char* in, char* out, size_t cap)
 {
     size_t n = 0;
     for (; *in && n + 2 < cap; in++) {
-        if (*in == '"' || *in == '\\') {
+        const unsigned char c = (unsigned char)*in;
+        if (c < 0x20) continue;                // drop control chars
+        if (c == '"' || c == '\\') {
             if (n + 3 >= cap) break;
             out[n++] = '\\';
         }
-        out[n++] = *in;
+        out[n++] = (char)c;
     }
     out[n] = '\0';
 }
@@ -406,6 +410,9 @@ void MiniR4WiFiRuntimeClass::_handleVmRun()
     // loadProgram + reset leaves _running=true (VM starts on the first
     // step()); the poll loop below drives it.
     _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_run\",\"ok\":true}");
+    char buf[64];
+    snprintf(buf, sizeof(buf), "VM started (%u bytes)", _vmProgramSize);
+    log(buf);
 }
 
 void MiniR4WiFiRuntimeClass::_pollVm()
@@ -413,7 +420,20 @@ void MiniR4WiFiRuntimeClass::_pollVm()
     if (!_vm.isRunning()) return;
     for (uint8_t i = 0; i < VM_STEPS_PER_POLL; i++) {
         const auto r = _vm.step();
-        if (r != MiniR4VM::Result::OK) return;   // HALTED or ERR_* — stop batch
+        if (r != MiniR4VM::Result::OK) {
+            // Report termination once — HALTED is the normal exit path
+            // (program hit an explicit HALT opcode), everything else is an
+            // error worth surfacing in the console.
+            char buf[64];
+            if (r == MiniR4VM::Result::HALTED) {
+                snprintf(buf, sizeof(buf), "VM halted at pc=%u", (unsigned)_vm.pc());
+            } else {
+                snprintf(buf, sizeof(buf), "VM error %d at pc=%u",
+                         (int)r, (unsigned)_vm.pc());
+            }
+            log(buf);
+            return;
+        }
     }
 }
 
@@ -426,6 +446,17 @@ void MiniR4WiFiRuntimeClass::safeDelay(uint32_t ms)
         const uint32_t remaining = (elapsed < ms) ? (ms - elapsed) : 0;
         delay(remaining < 20 ? remaining : 20);
     }
+}
+
+void MiniR4WiFiRuntimeClass::log(const char* msg)
+{
+    if (!msg || !*msg) return;
+    if (!g_client || !g_client.connected()) return;   // no client, silent drop
+    // Escaping up front keeps _sendJson's format string tiny — the msg is
+    // pre-safe by the time it goes into vsnprintf.
+    char escaped[200];
+    jsonEscape(msg, escaped, sizeof(escaped));
+    _sendJson("{\"t\":\"log\",\"s\":\"%s\"}", escaped);
 }
 
 bool MiniR4WiFiRuntimeClass::setDeviceName(const char* name)
@@ -829,6 +860,14 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         delay(150);   // let the ack leave the modem
         NVIC_SystemReset();
 
+    } else if (!strcmp(type, "echo")) {
+        // R3 helper: server logs whatever string the client passed.
+        // Useful for validating the log pipeline end-to-end and for
+        // command-line diagnostic tools ("does my hub see me?").
+        char msg[200];
+        if (jsonStr(line, "s", msg, sizeof(msg))) log(msg);
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"echo\",\"ok\":true}");
+
     } else if (!strcmp(type, "vm_start")) {
         long size = 0;
         jsonInt(line, "size", size);
@@ -858,6 +897,7 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
     } else if (!strcmp(type, "vm_stop")) {
         _vm.halt();
         _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_stop\",\"ok\":true}");
+        log("VM stopped by user");
 
     } else if (!strcmp(type, "vm_erase")) {
         _vm.halt();

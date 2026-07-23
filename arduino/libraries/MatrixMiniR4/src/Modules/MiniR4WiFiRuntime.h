@@ -90,6 +90,21 @@ public:
      */
     void safeDelay(uint32_t ms);
 
+    /**
+     * @brief Push a log line to the connected IDE (R3 — remote console).
+     *
+     * NDJSON frame `{"t":"log","s":"..."}` — appears in the HUD's Log tab.
+     * Safe to call from anywhere; no-op when no client is connected. The
+     * user sketch can call this the same way it would call Serial.println
+     * ("value: 42") — the wrapper's `Serial.println` redirect will call
+     * it automatically for USB-compiled sketches so students see prints
+     * without plugging a cable.
+     *
+     * Max effective length ~200 chars (bounded by _sendJson's stack buffer
+     * minus JSON overhead). Longer messages are truncated.
+     */
+    void log(const char* msg);
+
     /** @brief Persist a robot name (1..24 printable ASCII). */
     bool setDeviceName(const char* name);
 
