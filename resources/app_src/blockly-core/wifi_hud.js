@@ -1137,11 +1137,38 @@
         log(fmt(tr('sbConnected'), robot.name || robot.ip), 'ok');
         reconnectDelayMs = 5000;   // reset backoff on success
 
+        // Frame counter and last-seen timestamps help diagnose why a session
+        // dies (peer close vs. socket error vs. no frames arriving).
+        let frameCount = 0;
+        let lastFrameAt = Date.now();
+        const connectAt = Date.now();
+
+        // Wrap the RobotClient's own onFrame so we can count frames.
+        const origFrame = client.onFrame;
+        client.onFrame = (o) => {
+            if (o.t === 'tm') { frameCount++; lastFrameAt = Date.now(); }
+            if (origFrame) { try { origFrame(o); } catch (e) {} }
+        };
+
+        // Hook the raw socket for error visibility (RobotClient swallows errors).
+        if (client.sock) {
+            client.sock.on('error', (e) => {
+                log('socket error: ' + e.code + ' ' + e.message, 'error');
+            });
+            client.sock.on('end', () => {
+                log('peer sent FIN after ' + ((Date.now() - connectAt) / 1000).toFixed(1) +
+                    's, ' + frameCount + ' frames, last frame ' +
+                    ((Date.now() - lastFrameAt) / 1000).toFixed(1) + 's ago');
+            });
+        }
+
         client.onClose = () => {
             hudConnected = false;
             hudClient = null;
             setHudAwaiting(true);
-            log(tr('sbDisconnected'));
+            log(tr('sbDisconnected') + ' (uptime ' +
+                ((Date.now() - connectAt) / 1000).toFixed(1) + 's, ' +
+                frameCount + ' frames)');
             reconnectTimer = setTimeout(connectLoop, reconnectDelayMs);
         };
         client.onFrame = (o) => {
@@ -1243,8 +1270,17 @@
     }
 
     // --- Boot ----------------------------------------------------------------
+    // Idempotence guard: we schedule boot() 4x (DOMContentLoaded + three
+    // setTimeouts) so it fires even when the IDE loads slowly, but only
+    // the FIRST successful boot must start the connect loop — otherwise
+    // we spawn concurrent RobotClients that all fight over the runtime's
+    // single-client TCP slot, each dying within ~3 s and the HUD looking
+    // permanently unstable. Cost me a full debug session; do not remove.
+    let bootDone = false;
     function boot() {
-        if (!mountHud()) return;
+        if (bootDone) return;
+        if (!mountHud()) return;   // IDE DOM not ready yet — retry later
+        bootDone = true;
         startLocaleWatcher();
         connectLoop();
     }
