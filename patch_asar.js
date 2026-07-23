@@ -31,6 +31,7 @@ const PATCHES = [
   ['blockly-core/blocks/_mini.js',            'blockly-core/blocks/_mini.js'],
   ['blockly-core/arduino_wifi_wrapper.js',    'blockly-core/arduino_wifi_wrapper.js'],
   ['blockly-core/wifi_upload.js',             'blockly-core/wifi_upload.js'],
+  ['blockly-core/wifi_hud.js',                'blockly-core/wifi_hud.js'],
   ['views/main.html',                         'views/main.html'],
 ];
 

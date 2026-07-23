@@ -73,6 +73,7 @@ arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**/.build/
 !resources/app_src/blockly-core/blocks/_mini.js
 !resources/app_src/blockly-core/arduino_wifi_wrapper.js
 !resources/app_src/blockly-core/wifi_upload.js
+!resources/app_src/blockly-core/wifi_hud.js
 !resources/app_src/views/
 !resources/app_src/views/main.html
 
