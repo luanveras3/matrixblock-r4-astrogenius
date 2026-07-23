@@ -1119,7 +1119,17 @@
     function pauseHud() {
         hudPaused = true;
         clearTimeout(reconnectTimer);
-        if (hudClient) { try { hudClient.close(); } catch (_) {} hudClient = null; }
+        if (hudClient) {
+            // Detach onClose BEFORE close() — otherwise the async 'close'
+            // event schedules a stray reconnectTimer that survives resume's
+            // clearTimeout+overwrite (the timer's id is lost forever) and
+            // fires 5 s later, closing the socket resume just opened, whose
+            // onClose then schedules ANOTHER 5 s timer, ad infinitum. Cost
+            // me a full debug session; do not remove the null-out.
+            hudClient.onClose = null;
+            try { hudClient.close(); } catch (_) {}
+            hudClient = null;
+        }
         hudConnected = false;
         setHudAwaiting(true);
         // Give the modem 250 ms to notice the FIN and release the accept
@@ -1138,7 +1148,13 @@
     async function connectLoop() {
         if (hudPaused) return;
         clearTimeout(reconnectTimer);
-        if (hudClient) { try { hudClient.close(); } catch (_) {} hudClient = null; }
+        if (hudClient) {
+            // Same rationale as pauseHud: detach so this deliberate close
+            // doesn't cascade into a stray reconnect schedule.
+            hudClient.onClose = null;
+            try { hudClient.close(); } catch (_) {}
+            hudClient = null;
+        }
         setHudAwaiting(true);
         setHudHub(null);
 
@@ -1187,6 +1203,7 @@
                     's, ' + frameCount + ' frames, last frame ' +
                     ((Date.now() - lastFrameAt) / 1000).toFixed(1) + 's ago');
             });
+            // Also intercept destroy so we can tell "self-close" from "peer-close".
         }
 
         client.onClose = () => {
