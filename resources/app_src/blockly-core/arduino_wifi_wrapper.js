@@ -148,6 +148,11 @@
         // change), fall back to the BLE-branch order: userSetup() first,
         // WiFiRuntime.begin() second. Recovery still works as long as the
         // user setup terminates.
+        // R2: an ephemeral VM program (uploaded via "Send VM") takes over
+        // execution from userLoop while it's running. When the VM halts or
+        // the user stops it, userLoop resumes. This is the "3 modes"
+        // integration point: OTA sketches expose their userLoop, VM
+        // uploads temporarily replace it, USB is untouched.
         const driver = hasMiniBegin
             ? ('void setup()\n{\n' +
                '  MiniR4.begin();\n' +
@@ -156,7 +161,7 @@
                '}\n\n' +
                'void loop()\n{\n' +
                '  WiFiRuntime.poll();\n' +
-               '  userLoop();\n' +
+               '  if (!WiFiRuntime.isRunningVM()) { userLoop(); }\n' +
                '}\n')
             : ('void setup()\n{\n' +
                '  userSetup();\n' +
@@ -164,7 +169,7 @@
                '}\n\n' +
                'void loop()\n{\n' +
                '  WiFiRuntime.poll();\n' +
-               '  userLoop();\n' +
+               '  if (!WiFiRuntime.isRunningVM()) { userLoop(); }\n' +
                '}\n');
 
         return rewriteDelays(head + userSetup + userLoop + driver);

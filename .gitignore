@@ -51,6 +51,8 @@ arduino/libraries/MatrixMiniR4/src/*
 arduino/libraries/MatrixMiniR4/src/Modules/*
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.h
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.cpp
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4VM.h
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4VM.cpp
 !arduino/libraries/MatrixMiniR4/examples/
 arduino/libraries/MatrixMiniR4/examples/*
 !arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/
@@ -74,6 +76,10 @@ arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**/.build/
 !resources/app_src/blockly-core/arduino_wifi_wrapper.js
 !resources/app_src/blockly-core/wifi_upload.js
 !resources/app_src/blockly-core/wifi_hud.js
+!resources/app_src/blockly-core/wifi_vm_upload.js
+!resources/app_src/blockly-core/bytecode.js
+!resources/app_src/blockly-core/generator_bytecode/
+!resources/app_src/blockly-core/generator_bytecode/**
 !resources/app_src/views/
 !resources/app_src/views/main.html
 

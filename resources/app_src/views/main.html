@@ -484,6 +484,19 @@
 	<script type="text/javascript" src="../blockly-core/arduino_wifi_wrapper.js"></script>
 	<script type="text/javascript" src="../blockly-core/wifi_upload.js"></script>
 	<script type="text/javascript" src="../blockly-core/wifi_hud.js"></script>
+	<!-- R2: bytecode VM path — fast iteration alongside OTA/USB. bytecode.js
+	     defines Blockly.BytecodeVM; the generator_bytecode/*.js files add
+	     per-category emitters; wifi_vm_upload.js adds the "Enviar VM" button. -->
+	<script type="text/javascript" src="../blockly-core/bytecode.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/_mini.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/control.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/data.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/drivedc.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/math.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/operators.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/pins.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/procedures.js"></script>
+	<script type="text/javascript" src="../blockly-core/wifi_vm_upload.js"></script>
 	<!--
 		AstroGenius extensions for MATRIXblock Mini R4:
 		  - Tab manager (multiple projects open simultaneously)

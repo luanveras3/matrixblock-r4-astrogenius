@@ -48,8 +48,9 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+#include "MiniR4VM.h"
 
-#define MINIR4_WIFI_RUNTIME_VERSION "1.0.0"
+#define MINIR4_WIFI_RUNTIME_VERSION "1.1.0"
 
 class MiniR4WiFiRuntimeClass
 {
@@ -119,6 +120,26 @@ public:
     /** @return true while in AP fallback mode. */
     bool isAPMode() const { return _netMode == NET_AP; }
 
+    /** @return true while an ephemeral VM program is executing.
+     *
+     * The wifi wrapper's driver loop uses this to skip the user's
+     * compiled userLoop while the VM is active — so a "Send VM (fast)"
+     * upload seamlessly takes over from an OTA-uploaded program until
+     * the user stops the VM (vm_stop, reboot, or a fresh vm_start).
+     */
+    bool isRunningVM() const;
+
+    /**
+     * @brief Service the network stack without advancing the VM.
+     *
+     * Registered as MiniR4VM's yield callback so long DELAY_MS opcodes
+     * keep the UDP/TCP transport responsive. Must NOT re-enter the VM
+     * (that would recurse into DELAY_MS → yield → step → DELAY_MS and
+     * blow the Cortex-M4 stack — the exact bug fixed in a9db855 on the
+     * BLE branch). Safe to call from anywhere.
+     */
+    void pollNetworkOnly();
+
 private:
     enum NetMode : uint8_t { NET_DOWN = 0, NET_STA, NET_AP };
 
@@ -160,6 +181,24 @@ private:
     uint32_t _tmLastMs;
     uint8_t  _dhtEnabledMask;      ///< bit N = poll DHT on D(N+1)
     uint8_t  _dhtLastAppliedMask;
+
+    // --- Ephemeral VM (R2) ---
+    // The bytecode program lives entirely in RAM — no dataflash persistence
+    // in this first cut. Send-VM flow: vm_start (size) → 1..N vm_chunk
+    // frames (base64) → vm_end → optional vm_run (auto-run on end for
+    // simpler client). vm_stop halts; vm_erase drops the program. Reboot
+    // or OTA loses the VM — deliberate: keeps the divide between "iterate"
+    // (VM) and "commit" (OTA) simple.
+    MiniR4VM _vm;
+    uint16_t _vmProgramSize;       ///< 0 = no program loaded
+    uint16_t _vmRxExpected;        ///< bytes announced by vm_start
+    uint16_t _vmRxOffset;          ///< bytes received so far
+    bool     _vmReceiving;         ///< between vm_start and vm_end
+    void _handleVmStart(long size);
+    void _handleVmChunk(const char* b64);
+    void _handleVmEnd();
+    void _handleVmRun();
+    void _pollVm();
 };
 
 extern MiniR4WiFiRuntimeClass WiFiRuntime;

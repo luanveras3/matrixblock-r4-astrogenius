@@ -32,6 +32,17 @@ const PATCHES = [
   ['blockly-core/arduino_wifi_wrapper.js',    'blockly-core/arduino_wifi_wrapper.js'],
   ['blockly-core/wifi_upload.js',             'blockly-core/wifi_upload.js'],
   ['blockly-core/wifi_hud.js',                'blockly-core/wifi_hud.js'],
+  // R2 — bytecode VM (fast iteration via WiFi TCP)
+  ['blockly-core/wifi_vm_upload.js',                  'blockly-core/wifi_vm_upload.js'],
+  ['blockly-core/bytecode.js',                        'blockly-core/bytecode.js'],
+  ['blockly-core/generator_bytecode/_mini.js',        'blockly-core/generator_bytecode/_mini.js'],
+  ['blockly-core/generator_bytecode/control.js',      'blockly-core/generator_bytecode/control.js'],
+  ['blockly-core/generator_bytecode/data.js',         'blockly-core/generator_bytecode/data.js'],
+  ['blockly-core/generator_bytecode/drivedc.js',      'blockly-core/generator_bytecode/drivedc.js'],
+  ['blockly-core/generator_bytecode/math.js',         'blockly-core/generator_bytecode/math.js'],
+  ['blockly-core/generator_bytecode/operators.js',    'blockly-core/generator_bytecode/operators.js'],
+  ['blockly-core/generator_bytecode/pins.js',         'blockly-core/generator_bytecode/pins.js'],
+  ['blockly-core/generator_bytecode/procedures.js',   'blockly-core/generator_bytecode/procedures.js'],
   ['views/main.html',                         'views/main.html'],
 ];
 

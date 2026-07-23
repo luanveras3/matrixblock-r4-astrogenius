@@ -75,6 +75,21 @@ constexpr uint8_t  MAX_AP_PASS_LEN   = 63;
 constexpr uint8_t RSP_TELEMETRY   = 0xA2;
 constexpr uint8_t TELEMETRY_BYTES = 82;
 
+// --- Ephemeral VM ------------------------------------------------------------
+// Program storage: RA4M1 has 32 KB of SRAM. This runtime baseline uses ~18 KB;
+// 5 KB for VM bytecode leaves ample stack (measured 14 KB free with WiFi + VM
+// compiled in). 5120 bytes is empirically enough for the biggest Blockly
+// programs the BLE branch shipped, and matches the "ceiling" documented there
+// (block density ~5-6 B/block → ~900-1000 blocks).
+// Baseline runtime uses ~18 KB SRAM (WiFiS3 + Adafruit_SSD1306 + MiniR4
+// buffers). Empirical: 5 KB VM buffer overflowed the heap↔stack boundary
+// by ~900 B on Renesas RA4M1 (32 KB SRAM). 4 KB gives ~24 KB total used
+// with the linker still leaving comfortable stack headroom, and covers
+// ~600-800 real Blockly blocks (5-6 B/block density measured on BLE).
+constexpr uint16_t VM_MAX_PROGRAM = 4096;
+alignas(4) uint8_t g_vmProgram[VM_MAX_PROGRAM];
+constexpr uint8_t  VM_STEPS_PER_POLL = 32;
+
 WiFiUDP    g_udp;
 WiFiServer g_server(TCP_COMMAND_PORT);
 WiFiClient g_client;
@@ -160,6 +175,45 @@ void jsonEscape(const char* in, char* out, size_t cap)
 
 const char B64_ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+// Inverse alphabet lookup (returns 0..63, or 255 for invalid byte / padding).
+// Static init at file scope; ~256 B of flash, saves per-decode looping.
+struct B64Table {
+    uint8_t t[256];
+    constexpr B64Table() : t{} {
+        for (int i = 0; i < 256; i++) t[i] = 255;
+        for (int i = 0; i < 26; i++) t[(uint8_t)('A' + i)] = i;
+        for (int i = 0; i < 26; i++) t[(uint8_t)('a' + i)] = 26 + i;
+        for (int i = 0; i < 10; i++) t[(uint8_t)('0' + i)] = 52 + i;
+        t[(uint8_t)'+'] = 62;
+        t[(uint8_t)'/'] = 63;
+    }
+};
+constexpr B64Table B64_DECODE_TABLE{};
+
+// Decode base64 into out (caller-provided buffer, at least ceil(len*3/4) bytes).
+// Returns decoded byte count, or 0 on any invalid character. Padding '=' is
+// tolerated but not required.
+size_t base64Decode(const char* in, uint8_t* out, size_t outCap)
+{
+    uint32_t acc = 0;
+    int      bits = 0;
+    size_t   n = 0;
+    for (const char* p = in; *p; p++) {
+        const char c = *p;
+        if (c == '=' || c == '\r' || c == '\n' || c == ' ') continue;
+        const uint8_t v = B64_DECODE_TABLE.t[(uint8_t)c];
+        if (v == 255) return 0;   // invalid character
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (n >= outCap) return 0;   // overflow
+            out[n++] = (uint8_t)((acc >> bits) & 0xFF);
+        }
+    }
+    return n;
+}
+
 void base64Encode(const uint8_t* in, size_t len, char* out)
 {
     size_t o = 0;
@@ -193,6 +247,10 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _tmLastMs(0)
     , _dhtEnabledMask(0)
     , _dhtLastAppliedMask(0)
+    , _vmProgramSize(0)
+    , _vmRxExpected(0)
+    , _vmRxOffset(0)
+    , _vmReceiving(false)
 {
     _name[0] = '\0';
     _mac4[0] = '\0';
@@ -229,6 +287,10 @@ void MiniR4WiFiRuntimeClass::begin()
     _readConfig(_name, _ssid, _pass);
     _fillIdentity();
 
+    // Route VM's DELAY_MS yield through our transport-only poll so long
+    // waits inside bytecode don't starve UDP/TCP.
+    MiniR4VM::setYieldCallback([]() { WiFiRuntime.pollNetworkOnly(); });
+
     // Recovery gesture: BTN_UP held at boot => network-only loop, the user
     // sketch never runs. Guarantees a hub with a crashing/blocking sketch
     // can always be re-flashed over the air (manual §2.4 — mandatory).
@@ -256,6 +318,103 @@ void MiniR4WiFiRuntimeClass::poll()
     _pollDiscovery();
     _pollCommands();
     _pollTelemetry();
+    _pollVm();
+}
+
+void MiniR4WiFiRuntimeClass::pollNetworkOnly()
+{
+    if (!_begun || _netMode == NET_DOWN) return;
+    _pollDiscovery();
+    _pollCommands();
+    _pollTelemetry();
+    // Deliberately NOT _pollVm() — this is called from inside VM.step() to
+    // keep the transport alive during DELAY_MS; re-entering the VM would
+    // overflow the stack.
+}
+
+bool MiniR4WiFiRuntimeClass::isRunningVM() const
+{
+    return _vm.isRunning();
+}
+
+// --- Ephemeral VM handlers --------------------------------------------------
+
+void MiniR4WiFiRuntimeClass::_handleVmStart(long size)
+{
+    if (size <= 0 || size > VM_MAX_PROGRAM) {
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_start\",\"ok\":false,\"err\":\"size\"}");
+        return;
+    }
+    // Halt any running program and reset receive state.
+    _vm.halt();
+    _vmProgramSize = 0;
+    _vmRxExpected  = (uint16_t)size;
+    _vmRxOffset    = 0;
+    _vmReceiving   = true;
+    _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_start\",\"ok\":true}");
+}
+
+void MiniR4WiFiRuntimeClass::_handleVmChunk(const char* b64)
+{
+    if (!_vmReceiving) {
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_chunk\",\"ok\":false,\"err\":\"not receiving\"}");
+        return;
+    }
+    // Decode straight into the destination buffer; base64 growth is <4/3
+    // so the input line is bounded by (chunk*4/3 + JSON overhead), well
+    // under our _lineBuf's 192 B cap when chunks stay at ~120 B.
+    const size_t decoded = base64Decode(b64, g_vmProgram + _vmRxOffset,
+                                        VM_MAX_PROGRAM - _vmRxOffset);
+    if (decoded == 0) {
+        _vmReceiving = false;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_chunk\",\"ok\":false,\"err\":\"decode\"}");
+        return;
+    }
+    _vmRxOffset += (uint16_t)decoded;
+    if (_vmRxOffset > _vmRxExpected) {
+        _vmReceiving = false;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_chunk\",\"ok\":false,\"err\":\"overflow\"}");
+        return;
+    }
+    _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_chunk\",\"ok\":true,\"off\":%u}", _vmRxOffset);
+}
+
+void MiniR4WiFiRuntimeClass::_handleVmEnd()
+{
+    if (!_vmReceiving) {
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_end\",\"ok\":false,\"err\":\"not receiving\"}");
+        return;
+    }
+    if (_vmRxOffset != _vmRxExpected) {
+        _vmReceiving = false;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_end\",\"ok\":false,\"err\":\"short\"}");
+        return;
+    }
+    _vmProgramSize = _vmRxOffset;
+    _vmReceiving   = false;
+    _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_end\",\"ok\":true,\"size\":%u}", _vmProgramSize);
+}
+
+void MiniR4WiFiRuntimeClass::_handleVmRun()
+{
+    if (_vmProgramSize == 0) {
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_run\",\"ok\":false,\"err\":\"empty\"}");
+        return;
+    }
+    _vm.loadProgram(g_vmProgram, _vmProgramSize);
+    _vm.reset();
+    // loadProgram + reset leaves _running=true (VM starts on the first
+    // step()); the poll loop below drives it.
+    _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_run\",\"ok\":true}");
+}
+
+void MiniR4WiFiRuntimeClass::_pollVm()
+{
+    if (!_vm.isRunning()) return;
+    for (uint8_t i = 0; i < VM_STEPS_PER_POLL; i++) {
+        const auto r = _vm.step();
+        if (r != MiniR4VM::Result::OK) return;   // HALTED or ERR_* — stop batch
+    }
 }
 
 void MiniR4WiFiRuntimeClass::safeDelay(uint32_t ms)
@@ -670,6 +829,43 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         delay(150);   // let the ack leave the modem
         NVIC_SystemReset();
 
+    } else if (!strcmp(type, "vm_start")) {
+        long size = 0;
+        jsonInt(line, "size", size);
+        _handleVmStart(size);
+
+    } else if (!strcmp(type, "vm_chunk")) {
+        // Point at the raw base64 chunk inside _lineBuf; _handleVmChunk
+        // extracts and decodes it. Using jsonStr into a scratch would
+        // copy the payload twice for no reason.
+        char chunk[160];
+        if (!jsonStr(line, "d", chunk, sizeof(chunk))) {
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_chunk\",\"ok\":false,\"err\":\"parse\"}");
+        } else {
+            _handleVmChunk(chunk);
+        }
+
+    } else if (!strcmp(type, "vm_end")) {
+        _handleVmEnd();
+        // Convenience: if the client passed run:true, kick execution now.
+        bool autoRun = false;
+        jsonBool(line, "run", autoRun);
+        if (autoRun && _vmProgramSize) _handleVmRun();
+
+    } else if (!strcmp(type, "vm_run")) {
+        _handleVmRun();
+
+    } else if (!strcmp(type, "vm_stop")) {
+        _vm.halt();
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_stop\",\"ok\":true}");
+
+    } else if (!strcmp(type, "vm_erase")) {
+        _vm.halt();
+        _vmProgramSize = 0;
+        _vmRxOffset    = 0;
+        _vmReceiving   = false;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_erase\",\"ok\":true}");
+
     } else if (!strcmp(type, "ota")) {
         char url[160];
         if (!jsonStr(line, "url", url, sizeof(url))) {
@@ -930,13 +1126,17 @@ void MiniR4WiFiRuntimeClass::_pollTelemetry()
         }
     }
 
+    // VM fields (bytes 3..8): populated with real state now that the R2
+    // branch hosts the bytecode VM. The IDE parser reads these back in
+    // the "Estado > Programa" section of the HUD.
+    const uint16_t vmPc = _vm.pc();
     uint8_t buf[TELEMETRY_BYTES] = {
         RSP_TELEMETRY,
         (uint8_t)(battMv & 0xFF), (uint8_t)((battMv >> 8) & 0xFF),
-        0,                              // VM running flag — no VM on this branch
-        0,                              // VM last error
-        0, 0,                           // VM pc
-        0, 0,                           // VM program size
+        (uint8_t)(_vm.isRunning() ? 1 : 0),
+        (uint8_t)_vm.lastError(),
+        (uint8_t)(vmPc & 0xFF), (uint8_t)((vmPc >> 8) & 0xFF),
+        (uint8_t)(_vmProgramSize & 0xFF), (uint8_t)((_vmProgramSize >> 8) & 0xFF),
         (uint8_t)(roll & 0xFF),  (uint8_t)((roll  >> 8) & 0xFF),
         (uint8_t)(pitch & 0xFF), (uint8_t)((pitch >> 8) & 0xFF),
         (uint8_t)(yaw & 0xFF),   (uint8_t)((yaw   >> 8) & 0xFF),
