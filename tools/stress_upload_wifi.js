@@ -28,6 +28,7 @@ const dgram = require('dgram');
 const net = require('net');
 const http = require('http');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 const HTTP_PORT = 47800;
 const UDP_PORT = 47801;
@@ -86,31 +87,58 @@ function serveOta(buf) {
     });
 }
 
-function oneRound(robotIp, url) {
-    return new Promise(async (resolve) => {
-        const t0 = Date.now();
-        let lastPhase = 'connect';
-        let sock;
-        try {
-            sock = await new Promise((res, rej) => {
-                const s = net.createConnection({ host: robotIp, port: TCP_PORT });
-                const timer = setTimeout(() => { s.destroy(); rej(new Error('connect timeout')); }, 5000);
-                s.once('connect', () => { clearTimeout(timer); res(s); });
-                s.once('error', (e) => { clearTimeout(timer); rej(e); });
-            });
-        } catch (e) {
-            resolve({ ok: false, secs: (Date.now() - t0) / 1000, detail: `connect: ${e.message}` });
-            return;
-        }
+// Windows-only WLAN association refresh. When the robot reboots mid-OTA,
+// the PC keeps the "connected" state but the ARP entry goes stale — every
+// subsequent TCP connect times out even though the WLAN says everything is
+// fine (observed on the first 20-round run: 1 round hung in "apply" for
+// 180 s, 19 rounds connect-timed-out afterwards). netsh wlan
+// disconnect/connect forces a fresh association + DHCP + ARP.
+function refreshWlan(ssid) {
+    if (process.platform !== 'win32' || !ssid) return Promise.resolve();
+    return new Promise((resolve) => {
+        execFile('netsh', ['wlan', 'disconnect'], () => {
+            setTimeout(() => {
+                execFile('netsh', ['wlan', 'connect', `name=${ssid}`], () => {
+                    setTimeout(resolve, 8000);   // let DHCP settle
+                });
+            }, 2000);
+        });
+    });
+}
 
+async function oneRound(robotIp, url, wlanSsid) {
+    const t0 = Date.now();
+
+    // 1. TCP connect. If this fails, the ARP entry is likely stale — try
+    //    one WLAN refresh + retry before giving up.
+    let sock;
+    const connectOnce = () => new Promise((res, rej) => {
+        const s = net.createConnection({ host: robotIp, port: TCP_PORT });
+        const timer = setTimeout(() => { s.destroy(); rej(new Error('connect timeout')); }, 5000);
+        s.once('connect', () => { clearTimeout(timer); res(s); });
+        s.once('error', (e) => { clearTimeout(timer); rej(e); });
+    });
+    try {
+        sock = await connectOnce();
+    } catch (e) {
+        if (wlanSsid) {
+            await refreshWlan(wlanSsid);
+            try { sock = await connectOnce(); }
+            catch (e2) { return { ok: false, secs: (Date.now() - t0) / 1000, detail: `connect after wlan refresh: ${e2.message}` }; }
+        } else {
+            return { ok: false, secs: (Date.now() - t0) / 1000, detail: `connect: ${e.message}` };
+        }
+    }
+
+    // 2. Stream ota_status frames. "apply" (or "error") is a terminal event;
+    //    socket close during OTA also counts as the robot rebooting mid-
+    //    handshake if lastPhase was verify or apply. Anything else is a
+    //    real failure.
+    const applied = await new Promise((resolve) => {
         let buf = '';
-        let done = false;
-        const finish = (result) => {
-            if (done) return;
-            done = true;
-            try { sock.destroy(); } catch (e) {}
-            resolve(result);
-        };
+        let lastPhase = 'ota';
+        let settled = false;
+        const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
         sock.on('data', (d) => {
             buf += d.toString();
@@ -122,55 +150,62 @@ function oneRound(robotIp, url) {
                     if (o.t !== 'ota_status') continue;
                     lastPhase = o.phase;
                     if (o.phase === 'error') {
-                        finish({ ok: false, secs: (Date.now() - t0) / 1000,
-                                 detail: `ota error ${o.code} (${o.detail})` });
-                        return;
+                        settle({ ok: false, detail: `ota error ${o.code} (${o.detail})` });
+                    } else if (o.phase === 'apply') {
+                        settle({ ok: true, detail: 'apply frame received' });
                     }
-                    if (o.phase === 'apply') {
-                        // Success handshake: robot will reboot after this frame.
-                        // Wait for socket close (or the discover loop below).
-                    }
-                } catch (e) {}
+                } catch (_) {}
             }
         });
-        sock.on('close', async () => {
-            if (done) return;
-            if (lastPhase !== 'apply') {
-                finish({ ok: false, secs: (Date.now() - t0) / 1000,
-                         detail: `socket closed during ${lastPhase}` });
-                return;
+        sock.on('close', () => {
+            // Robot may reset before flushing the apply frame — count verify
+            // and apply as success signals when the socket closes clean.
+            if (lastPhase === 'apply' || lastPhase === 'verify') {
+                settle({ ok: true, detail: `socket closed during ${lastPhase} (reboot)` });
+            } else {
+                settle({ ok: false, detail: `socket closed during ${lastPhase}` });
             }
-            // Reboot + re-announce.
-            const deadline = Date.now() + 60000;
-            while (Date.now() < deadline) {
-                const robots = await discover(2000);
-                const back = robots.find((r) => r.ip === robotIp);
-                if (back) {
-                    finish({ ok: true, secs: (Date.now() - t0) / 1000,
-                             detail: `back as ${back.name}` });
-                    return;
-                }
-            }
-            finish({ ok: false, secs: (Date.now() - t0) / 1000,
-                     detail: 'did not come back within 60 s' });
         });
         sock.on('error', () => {});
 
         sock.write(JSON.stringify({ t: 'ota', url }) + '\n');
-        setTimeout(() => {
-            if (!done) finish({ ok: false, secs: (Date.now() - t0) / 1000,
-                                detail: `overall timeout in ${lastPhase}` });
-        }, 180000);
+
+        setTimeout(() => settle({ ok: false, detail: `overall timeout in ${lastPhase}` }), 90000);
     });
+    try { sock.destroy(); } catch (_) {}
+
+    if (!applied.ok) {
+        return { ok: false, secs: (Date.now() - t0) / 1000, detail: applied.detail };
+    }
+
+    // 3. Robot rebooting — wait for it to re-announce. Refresh WLAN once
+    //    partway through: the AP may cycle SSID/beacon and Windows keeps a
+    //    stale association until forced to redo the DHCP handshake.
+    let refreshed = false;
+    const deadline = Date.now() + 60000;
+    await new Promise((res) => setTimeout(res, 3000));   // let the reset land
+    while (Date.now() < deadline) {
+        const robots = await discover(2000);
+        const back = robots.find((r) => r.ip === robotIp);
+        if (back) return { ok: true, secs: (Date.now() - t0) / 1000, detail: `back as ${back.name}` };
+        if (!refreshed && wlanSsid && Date.now() - t0 > 20000) {
+            refreshed = true;
+            await refreshWlan(wlanSsid);
+        }
+    }
+    return { ok: false, secs: (Date.now() - t0) / 1000, detail: 'did not come back within 60 s' };
 }
 
 async function main() {
-    const [otaPath, roundsStr, robotIpArg] = process.argv.slice(2);
+    const [otaPath, roundsStr, robotIpArg, wlanSsidArg] = process.argv.slice(2);
     if (!otaPath) {
-        console.error('Usage: node stress_upload_wifi.js <sketch.ota> [rounds] [robot-ip]');
+        console.error('Usage: node stress_upload_wifi.js <sketch.ota> [rounds] [robot-ip] [wlan-ssid]');
+        console.error('  wlan-ssid: pass the SSID of the robot AP to force a Windows WLAN');
+        console.error('             refresh after each round (avoids stale ARP on AP mode).');
         process.exit(1);
     }
     const rounds = parseInt(roundsStr, 10) || 20;
+    const wlanSsid = wlanSsidArg || '';
     const otaBuf = fs.readFileSync(otaPath);
     console.log(`payload: ${otaPath} (${otaBuf.length} bytes)`);
 
@@ -195,11 +230,13 @@ async function main() {
     const times = [];
     for (let i = 1; i <= rounds; i++) {
         const label = `round ${String(i).padStart(2)}/${rounds}`;
-        const r = await oneRound(robotIp, url);
+        const r = await oneRound(robotIp, url, wlanSsid);
         if (r.ok) okCount++;
         times.push(r.secs);
         console.log(`${label}: ${r.ok ? 'OK  ' : 'FAIL'} ${r.secs.toFixed(1).padStart(6)} s  ${r.detail}`);
-        await new Promise((res) => setTimeout(res, 2000));
+        // Small pause; the per-round logic already refreshes WLAN when it
+        // needs to (on a failed connect, or 20 s into the reboot wait).
+        await new Promise((res) => setTimeout(res, 3000));
     }
 
     server.close();
