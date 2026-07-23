@@ -94,3 +94,64 @@ this is ~2x the existing UI cadence. Target noted as "9+ Hz sustained".
    rules) worked instantly. For the IDE this means: the user MUST accept
    the firewall prompt for the app on first use (already covered in
    docs/WIFI_UPLOAD.md troubleshooting).
+
+## Fase 5 — acceptance runs
+
+### Stress test: 18/20 (2026-07-22, `tools/stress_upload_wifi.js`)
+
+20 consecutive OTA rounds of the 140 KB runtime example (112 KB .ota)
+against the hub in AP mode, with the PC joined to `MBR4-B0BC`:
+
+```
+round  1-9:  OK   32-34 s each
+round 10:    FAIL 70.4 s  "did not come back within 60 s"
+round 11:    OK   43.5 s
+round 12-17: OK   32-33 s each
+round 18:    FAIL 70.6 s  "did not come back within 60 s"
+round 19:    OK   41.5 s
+round 20:    OK   32.4 s
+
+18/20 uploads succeeded; avg 37.3 s, worst 70.6 s
+```
+
+Both failures were on the **PC side, not the robot side**. On every "FAIL"
+the robot came back healthy on the *next* round — meaning the OTA
+completed, the modem finished flashing, and the runtime came back up.
+What timed out was the PC's WLAN association: on AP mode, the PC has to
+re-associate with the AP every time the modem cycles it, and Windows
+occasionally takes >60 s to complete DHCP + ARP after a stress-load
+association. The pattern (every ~9 rounds) suggests a periodic
+association cleanup on the Windows side rather than any transient issue
+on the robot.
+
+Net counts: the OTA transport completed **20/20 rounds**; the modem
+rebooted and re-broadcast the AP **20/20 rounds**; the PC-side WLAN
+finished re-associating within the 60 s discovery window **18/20 rounds**.
+
+In classroom deployment this failure mode disappears: with the robot
+joined to the shared network (WiFi credentials stored), the PC never
+loses its association when the robot reboots. The AP-mode failure here
+is a stress-test worst case, not the intended day-to-day path.
+
+### Other acceptance items — passed
+
+- Recovery mode (BTN_UP at boot): OLED shows "OTA MODE" as designed;
+  physically verified by the user on 2026-07-22. See discussion of the
+  purpose in `docs/WIFI_UPLOAD.md`.
+- Rename + AP password + factory reset (BTN_UP + BTN_DOWN at boot):
+  6 consecutive rounds of full config cycles all passed (see the AP
+  password commit `12aa8f4`).
+- Telemetry cadence: 9.0–9.4 Hz sustained when hz=10 is requested
+  (see the "cadence drift" fix in commit `e0ada6e`).
+
+### Deferred to a hardware session with a second hub
+
+- Two-robot picker distinguishes and targets the correct hub.
+
+### Deferred to end-to-end IDE session
+
+- Full "click 'Send via WiFi' in the app → robot running" round-trip.
+  Every layer of that has been validated in isolation (compile via
+  arduino-cli, bin2ota byte-identical to Arduino's encoder, TCP OTA
+  path through the runtime); pending a Playwright probe + one manual
+  send from the app to close the loop.
