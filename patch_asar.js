@@ -34,6 +34,8 @@ const PATCHES = [
   ['blockly-core/wifi_hud.js',                'blockly-core/wifi_hud.js'],
   // R2 — bytecode VM (fast iteration via WiFi TCP)
   ['blockly-core/wifi_vm_upload.js',                  'blockly-core/wifi_vm_upload.js'],
+  // AstroGenius Edition badge shown in the navbar next to the MATRIX logo.
+  ['assets/img/astrogenius-badge.png',                'assets/img/astrogenius-badge.png'],
   ['blockly-core/bytecode.js',                        'blockly-core/bytecode.js'],
   ['blockly-core/generator_bytecode/_mini.js',        'blockly-core/generator_bytecode/_mini.js'],
   ['blockly-core/generator_bytecode/control.js',      'blockly-core/generator_bytecode/control.js'],
