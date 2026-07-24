@@ -337,12 +337,22 @@
 			<nav class="navbar navbar-expand navbar-dark" style="background-color: #008184; z-index: 1049">
 				<div class="container-fluid">
 					<a class="navbar-brand me-0"><img src="../assets/img/nav-logo.png" width="156px" height="53px" /></a>
-					<!-- AstroGenius Edition badge — the fork's identity next to the MATRIX brand. -->
-					<div class="navbar-brand d-flex align-items-center ms-2" style="padding-left:12px; border-left:1px solid rgba(255,255,255,0.3); color:#fff;" title="AstroGenius Edition">
+					<!-- AstroGenius Edition badge — the fork's identity next to the MATRIX brand.
+					     Brazil flag as inline SVG so it renders crisp at any zoom and doesn't
+					     depend on the platform emoji font (Windows renders 🇧🇷 as "BR" text). -->
+					<div class="navbar-brand d-flex align-items-center ms-2" style="padding-left:12px; border-left:1px solid rgba(255,255,255,0.3); color:#fff;" title="AstroGenius Edition — Brasil">
 						<img src="../assets/img/astrogenius-badge.png" width="42" height="42" alt="AstroGenius" style="margin-right:8px;" />
 						<div style="line-height:1.1;">
 							<div style="font-size:10px; opacity:0.85; letter-spacing:0.08em; text-transform:uppercase; font-weight:600;">AstroGenius</div>
-							<div style="font-size:13px; font-weight:700;">Edition</div>
+							<div style="display:flex; align-items:center; gap:6px;">
+								<span style="font-size:13px; font-weight:700;">Edition</span>
+								<svg viewBox="0 0 700 490" width="20" height="14" xmlns="http://www.w3.org/2000/svg" style="border-radius:2px; box-shadow:0 0 0 1px rgba(255,255,255,0.25);" aria-label="Brasil" role="img">
+									<title>Brasil</title>
+									<rect width="700" height="490" fill="#009c3b"/>
+									<polygon points="350,45 655,245 350,445 45,245" fill="#ffdf00"/>
+									<circle cx="350" cy="245" r="88" fill="#002776"/>
+								</svg>
+							</div>
 						</div>
 					</div>
 					<div class="navbar-nav">
