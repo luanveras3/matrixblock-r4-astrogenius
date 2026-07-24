@@ -256,13 +256,19 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _vmRxOffset(0)
     , _vmReceiving(false)
 {
-    _name[0] = '\0';
-    _mac4[0] = '\0';
-    _ssid[0] = '\0';
-    _pass[0] = '\0';
+    // FULL zero of the char buffers, not just [0]='\0'. Any read past the
+    // first byte (jsonEscape iterating on stale bytes after a bad length
+    // field, strlen wandering into the next field) would otherwise pick up
+    // undefined memory — the exact class of bug that best explains the
+    // "rename + AP password + reboot leaves the hub unreachable" report
+    // we couldn't fully reproduce in bench testing. Cheap insurance.
+    memset(_name,  0, sizeof(_name));
+    memset(_mac4,  0, sizeof(_mac4));
+    memset(_ssid,  0, sizeof(_ssid));
+    memset(_pass,  0, sizeof(_pass));
+    memset(_apPass, 0, sizeof(_apPass));
     _macCache[0] = _macCache[1] = 0xFF;
     strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
-    _apPass[sizeof(_apPass) - 1] = '\0';
     _apPassCustom = false;
 }
 
@@ -512,14 +518,15 @@ bool MiniR4WiFiRuntimeClass::setAPPassword(const char* pass)
 bool MiniR4WiFiRuntimeClass::factoryReset()
 {
     if (g_flash.erase(CONFIG_ADDR, DATAFLASH_BLOCK) != 0) return false;
-    _name[0] = '\0';
+    // Full memset, same rationale as the constructor.
+    memset(_name,  0, sizeof(_name));
+    memset(_ssid,  0, sizeof(_ssid));
+    memset(_pass,  0, sizeof(_pass));
+    memset(_apPass, 0, sizeof(_apPass));
     _nameCustom = false;
-    _ssid[0] = '\0';
-    _pass[0] = '\0';
     _macCache[0] = _macCache[1] = 0xFF;
     _apPassCustom = false;
     strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
-    _apPass[sizeof(_apPass) - 1] = '\0';
     return true;
 }
 
@@ -627,8 +634,8 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
         // AP fallback: always available even with no credentials stored.
         char apName[33];
         apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
-        WIFIRT_TRACE(F("starting fallback AP"));
-        if (WiFi.beginAP(apName, _apPass) == WL_AP_LISTENING) {
+        const int apResult = WiFi.beginAP(apName, _apPass);
+        if (apResult == WL_AP_LISTENING) {
             _netMode = NET_AP;
             delay(250);   // let the AP netif settle before binding sockets
         }

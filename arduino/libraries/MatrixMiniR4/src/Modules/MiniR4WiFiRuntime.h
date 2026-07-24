@@ -50,7 +50,7 @@
 #include <stdint.h>
 #include "MiniR4VM.h"
 
-#define MINIR4_WIFI_RUNTIME_VERSION "1.1.0"
+#define MINIR4_WIFI_RUNTIME_VERSION "1.1.2"
 
 class MiniR4WiFiRuntimeClass
 {
