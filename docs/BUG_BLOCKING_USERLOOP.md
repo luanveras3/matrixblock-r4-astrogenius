@@ -1,10 +1,27 @@
 # OPEN BUG — blocking user code starves the runtime and makes the hub unreachable
 
 **Status:** open, root cause identified, not yet fixed.
-**Severity:** critical. It is reachable from a standard Blockly block, it
-survives power cycles, and it takes down **both** transports — WiFi *and* the
-USB config channel — so the hub looks permanently dead.
+**Severity:** blocking. Not "a bug that can be hit" — **the normal way student
+programs are written hits it every time.**
 **Reported:** 2026-07-25, with a complete reproduction.
+
+> **Why this is the main path, not an edge case** (maintainer, 2026-07-25):
+> the Arduino starts executing the instant it resets, so students need a gate
+> to control *when* the program actually begins. Practically every program
+> therefore opens with **"wait until BTN_UP is pressed"**. That single block
+> compiles to a bare busy-wait, so essentially **every program uploaded from
+> the IDE takes the hub off the network from the moment it boots** — over
+> WiFi *and* over the USB config channel.
+>
+> Consequences for planning:
+> - this is not optional cleanup; the WiFi feature is unusable in real
+>   classroom use until it is fixed, and it should block any wider release;
+> - the fix must specifically cover *this* shape: a blocking loop as the very
+>   first thing `userLoop()` does, i.e. starvation from boot;
+> - the moment the robot sits at "waiting to start" is exactly when a teacher
+>   or student wants to connect, upload or configure it. Making this pattern
+>   poll-safe does not merely remove a bug, it turns the most common state a
+>   robot is ever in into its most responsive one.
 
 ---
 
@@ -173,6 +190,22 @@ Notes for whoever implements it:
 Also fix `control_wait_until` at the generator level to emit a yielding loop,
 so block-generated code is correct even outside the wrapper. Do both: the
 generator for correctness, the wrapper as the net that catches everything.
+
+**A2. Consider making "wait to start" a first-class runtime concept.**
+Since nearly every program opens with this gate, it is worth more than a
+generic loop rewrite. A `WiFiRuntime.waitForStart()` that polls while it
+waits could, at no extra cost to the student:
+- keep discovery, TCP and USB fully alive while parked (the state a robot
+  spends most of its idle life in, and exactly when someone wants to reach
+  it);
+- show "waiting to start" on the OLED, so a robot that looks dead is visibly
+  just waiting;
+- accept a **remote start** from the IDE — one "Start" button for a whole
+  classroom, and the basis for the R7 teacher panel;
+- report the waiting state in `info`, so the connection panel can explain
+  what the robot is doing instead of leaving the user guessing.
+The generic loop fix (A) is still required — it catches every other blocking
+shape — but this turns the single most common one into a feature.
 
 **B. Rate-limit `log()`.** Cap outgoing log frames (~10/s is already twice the
 old BLE dashboard cadence), drop the excess and emit a periodic

@@ -5,14 +5,18 @@ implemented, to be picked up cold. Ordered by what unblocks the most.
 
 ---
 
-## 1. Fix the blocking-loop starvation (critical, do this first)
+## 1. Fix the blocking-loop starvation (blocking — nothing else ships first)
 
 Full analysis and implementation traps: **`BUG_BLOCKING_USERLOOP.md`**.
 
 One line summary: `WiFiRuntime.poll()` only runs when `loop()` iterates, so
 any user code that does not return kills WiFi **and** the USB config channel.
-The stock **"wait until"** block compiles to `while(!cond);` — a bare
-busy-wait — so a student reaches this with one drag.
+
+**Treat this as release-blocking.** The Arduino starts running the moment it
+resets, so students gate their programs with "wait until BTN_UP is pressed" —
+which means the *typical* program, not an unusual one, starts with a bare
+busy-wait and takes the hub off the network from boot. The WiFi feature is
+not usable in a real classroom until this is fixed.
 
 Work items:
 
