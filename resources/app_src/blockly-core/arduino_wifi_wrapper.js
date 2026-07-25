@@ -12,7 +12,6 @@
  * can never lock the hub out of OTA mode.
  *
  * Differences from the BLE branch's arduino_ble_wrapper.js (the reference):
- *  - no bytecode VM, so no sketch-ID bookkeeping and no isRunningVM() gate;
  *  - MiniR4.begin() is hoisted out of userSetup() into the driver so the
  *    runtime (buttons/OLED/dataflash) is initialised before the recovery
  *    check; the generator emits it as the first setup statement, but we
@@ -99,6 +98,41 @@
             '$1WiFiRuntime.safeDelay$2');
     }
 
+    // R3 v2 — mirror the print blocks to the wireless console.
+    //
+    // Serial.print/println keep working exactly as before over USB; the
+    // rewritten call also ships the finished line as a {"t":"log"} frame, so
+    // a student running without a cable sees their prints in the IDE console.
+    // `println(` cannot be matched by the `print(` pattern (the paren must
+    // follow immediately), so the two replacements are independent.
+    // Serial.begin/read/available/write are deliberately untouched.
+    function rewriteSerialPrints(src) {
+        if (!src) return src;
+        return src
+            .replace(/(^|[^A-Za-z0-9_.])Serial\.println(\s*\()/g,
+                     '$1WiFiRuntime.logPrintln$2')
+            .replace(/(^|[^A-Za-z0-9_.])Serial\.print(\s*\()/g,
+                     '$1WiFiRuntime.logPrint$2');
+    }
+
+    // Produce a fresh 32-bit sketch ID for this build. The runtime stores it
+    // alongside a saved VM program; a mismatch on the next boot is how we
+    // detect that a USB or OTA reflash replaced the native sketch, and drop
+    // the stale bytecode instead of auto-running it against a program that no
+    // longer exists. Same scheme as the BLE branch. 0 and 0xFFFFFFFF are
+    // reserved sentinels ("any sketch" / erased flash).
+    function generateSketchId() {
+        let n = 0;
+        while (n === 0 || n === 0xFFFFFFFF) {
+            n = (Math.random() * 0x100000000) >>> 0;
+        }
+        return n;
+    }
+
+    function formatSketchIdLiteral(id) {
+        return '0x' + id.toString(16).padStart(8, '0').toUpperCase() + 'u';
+    }
+
     function wrapWithWiFiRuntime(src) {
         if (!src) return src;
 
@@ -113,6 +147,10 @@
         let head = src.substring(0, splitAt).replace(/\n*$/, '\n');
 
         const runtimeInclude = '#include "Modules/MiniR4WiFiRuntime.h"';
+        const sketchIdDefine =
+            '#define MINIR4_SKETCH_ID ((uint32_t)' +
+            formatSketchIdLiteral(generateSketchId()) + ')';
+        const injected = runtimeInclude + '\n' + sketchIdDefine;
         if (head.indexOf(runtimeInclude) < 0) {
             const includeRegex = /(^|\n)#include[^\n]*\n/g;
             let m, lastEnd = -1;
@@ -120,10 +158,10 @@
                 lastEnd = m.index + m[0].length;
             }
             if (lastEnd > 0) {
-                head = head.substring(0, lastEnd) + runtimeInclude + '\n' +
+                head = head.substring(0, lastEnd) + injected + '\n' +
                        head.substring(lastEnd);
             } else {
-                head = runtimeInclude + '\n' + head;
+                head = injected + '\n' + head;
             }
         }
 
@@ -153,9 +191,12 @@
         // the user stops it, userLoop resumes. This is the "3 modes"
         // integration point: OTA sketches expose their userLoop, VM
         // uploads temporarily replace it, USB is untouched.
+        // setSketchId must precede begin(): begin() decides there and then
+        // whether a VM program saved in dataflash belongs to this sketch.
         const driver = hasMiniBegin
             ? ('void setup()\n{\n' +
                '  MiniR4.begin();\n' +
+               '  WiFiRuntime.setSketchId(MINIR4_SKETCH_ID);\n' +
                '  WiFiRuntime.begin();\n' +
                '  userSetup();\n' +
                '}\n\n' +
@@ -165,6 +206,7 @@
                '}\n')
             : ('void setup()\n{\n' +
                '  userSetup();\n' +
+               '  WiFiRuntime.setSketchId(MINIR4_SKETCH_ID);\n' +
                '  WiFiRuntime.begin();\n' +
                '}\n\n' +
                'void loop()\n{\n' +
@@ -172,12 +214,19 @@
                '  if (!WiFiRuntime.isRunningVM()) { userLoop(); }\n' +
                '}\n');
 
-        return rewriteDelays(head + userSetup + userLoop + driver);
+        // Rewrites run last, over the whole assembled sketch: the driver
+        // itself contains no delay/Serial.print calls, and doing it once
+        // here is cheaper than doing it per fragment.
+        return rewriteSerialPrints(
+            rewriteDelays(head + userSetup + userLoop + driver));
     }
 
     // Expose for testing.
     Blockly.Arduino.__wrapWithWiFiRuntime = wrapWithWiFiRuntime;
     Blockly.Arduino.__rewriteWifiDelays   = rewriteDelays;
+    Blockly.Arduino.__rewriteWifiPrints   = rewriteSerialPrints;
+    Blockly.Arduino.__generateSketchId    = generateSketchId;
+    Blockly.Arduino.__formatSketchIdLit   = formatSketchIdLiteral;
 
     console.log('[WiFi wrapper] Blockly.Arduino.finish patched.');
 })();

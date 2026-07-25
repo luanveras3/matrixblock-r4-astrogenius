@@ -155,3 +155,231 @@ is a stress-test worst case, not the intended day-to-day path.
   arduino-cli, bin2ota byte-identical to Arduino's encoder, TCP OTA
   path through the runtime); pending a Playwright probe + one manual
   send from the app to close the loop.
+
+---
+
+## Session 2026-07-25 — VM persistence, live debug, print mirror
+
+Firmware `1.2.0` on the bench hub (named `Debughub`, AP `Debughub-B0BC`),
+flashed over USB on COM10. All results below are from that hub, in AP
+mode, driven by the new `tools/hubctl.js` bench client.
+
+### Static RAM is the binding constraint — and it is a hard error
+
+UNOWIFIR4's linker script reserves a **fixed 8 KB heap**
+(`BSP_CFG_HEAP_BYTES`) and a **fixed 1 KB main stack**
+(`BSP_CFG_STACK_MAIN_BYTES`) out of 32 KB, minus the 256-byte vector
+table. Everything static therefore has to fit in **23296 bytes**, and
+overflowing it is a link failure, not a warning:
+
+```
+ld.exe: section .stack_dummy VMA [20007b00,20007eff]
+        overlaps section .heap VMA [20005b38,20007b37]
+```
+
+The R2 build was already at 23190 bytes — only **106 bytes of slack** —
+so the print-mirror line buffer and the debug state pushed it over. The
+VM program buffer dropped from 4096 to **3584 bytes** to pay for it.
+
+Note for future work: the "9.6 KB stack headroom" figure quoted in the R2
+notes was a misreading of arduino-cli's *free RAM* number. That figure is
+heap + stack combined; the actual stack is 1 KB and never changes.
+
+Final build: **161804 bytes flash (61%)**, **22812 bytes statics (69%)**,
+484 bytes of static slack left.
+
+### VM persistence — passed
+
+| Check | Result |
+|---|---|
+| `vm_end` with `save:true` | `{"ok":true,"size":18,"saved":true}` |
+| `vm_info` reports the stored copy | `stored:true` |
+| Reboot → program auto-runs | pass, counter restarts from 0 |
+| `vm_forget` → reboot → gone | `size:0, stored:false`, userLoop resumes |
+| Reflash to a different sketch → dropped | pass (see the bug below) |
+
+**Bug found and fixed on hardware.** The first cut treated a stored sketch
+id of `0` as "any sketch", so that bench sketches without a declared id
+could still auto-run saved programs. A program saved by the standalone
+runtime example was then adopted by a completely unrelated sketch flashed
+over USB — and because a running VM suppresses `userLoop`, that sketch
+appeared totally dead (no prints, no behaviour) with nothing in the logs
+to explain it. The rule is now plain equality: a saved program auto-runs
+only on the exact sketch it was saved against. A sketch with no declared
+id still matches programs it saved itself, which is all the bench case
+needed.
+
+### Live block debug — passed
+
+Program under test (18 bytes, hand-assembled):
+`v0 = 0; forever { v0 = v0 + 1; delay(100); }`
+
+- `vm_debug on hz:10` → steady `{"t":"pc","addr":N,"run":1}` frames
+  cycling through the loop body (4, 6, 8, 11, 13, 14).
+- `vm_pause` freezes both pc and variables: pc identical after 1 s, `v0`
+  identical after 700 ms.
+- `vm_step` advances **exactly one instruction** per call —
+  8 → 9 → 11 → 13 → 14 → 4, matching the hand-assembled listing
+  (ADD, STORE_VAR+1, PUSH_I8+1, DELAY_MS, JMP+2).
+- Breakpoint at pc 11: hit, logged (`VM paused at breakpoint pc=11`),
+  `vm_info` reports `paused:true, pc:11`.
+- Resuming from a breakpoint does **not** re-trigger it in place (pc had
+  moved to 14 within 120 ms) and it **does** re-arm on the next loop pass
+  (paused at 11 again 1.2 s later).
+
+**pc stream is capped at 10 Hz, not the 20 the roadmap sketched.** Every
+outgoing frame costs a synchronous ~100 ms modem write — the same ceiling
+that holds telemetry to 9.4 Hz — and the pc stream shares that budget with
+telemetry. 10 Hz already reads as "live" for block highlighting.
+
+### Print mirror (R3 v2) — passed
+
+Bench sketch: `docs/poc/PRINT_VM_BENCH/`, written the way the wrapper's
+rewrite comes out.
+
+- `logPrint("count="); logPrint(n); logPrintln(" ok")` arrives as **one**
+  console line, `count=11 ok` — line buffering behaves like Print.
+- `logPrintln(float)` is its own line, `7.80`.
+- USB Serial output read back from COM10 is **identical** to the wireless
+  console, so the cable workflow is unchanged.
+
+### Environment note (unchanged, bit us again)
+
+After every robot reboot the PC keeps an APIPA (169.254.x.x) lease and
+discovery silently finds nothing while `netsh wlan show interfaces` still
+says "Conectado". The documented fix works every time:
+`netsh wlan disconnect` → 3 s → `netsh wlan connect name=<SSID>` → 14 s →
+confirm the address is 192.168.4.2.
+
+---
+
+## Field incident 2026-07-25 — "the hub pings but the IDE finds nothing"
+
+A user ran the BTN_UP + BTN_DOWN factory-reset gesture and afterwards the hub
+could not be found by the IDE. Measured state, which is the useful part:
+
+| Layer | Result |
+|---|---|
+| AP broadcasting (`netsh wlan show networks`) | yes, `MBR4-B0BC` |
+| PC associated, DHCP lease | yes, 192.168.4.2 |
+| ICMP ping to 192.168.4.1 | **OK, 1 ms** |
+| UDP discovery (47801) | **nothing** |
+| TCP connect (47802) | **accepted** |
+| TCP reply to `{"t":"info"}` | **never arrives** |
+
+That combination — modem answers ping and completes the TCP handshake while
+nothing reaches the sketch — is the same modem socket-layer wedge documented
+for the failed-STA path in commit `a06f6a5`. Diagnostically it is the worst
+possible signature, because every "is it on the network?" check a user knows
+how to run says yes.
+
+**Recovery is always a USB reflash** (`arduino-cli ... -u -p COM10`). It worked
+first try here, and it is worth repeating that this is the guarantee the whole
+design rests on: USB is never mediated by the modem.
+
+### Root cause: not proven. What was done about it anyway.
+
+The wedge could **not** be reproduced: 5 software-triggered
+`factory` + `reboot` cycles on the old firmware all came back healthy. So the
+following is a fix for the one code path that is *known* to be risky and that
+the factory-reset gesture is *guaranteed* to run — not a proven root cause.
+
+A factory reset clears the cached MAC. The next boot therefore brings the AP
+up as `MBR4-0000`, discovers the real MAC, and used to **restart the AP in
+place** (`WiFi.end()` → settle → `beginAP()`) before binding the UDP and TCP
+sockets a few hundred ms later. Binding sockets right after a modem mode
+transition is exactly the window that wedged a hub before; the settle delays
+added in `a06f6a5` make it rarer, not impossible.
+
+Since the MAC is safely in dataflash by that point, `_refreshMacIdentity()`
+now issues `NVIC_SystemReset()` instead. The next boot reads the cached MAC,
+brings the AP up **once** with the correct SSID, and binds sockets on a netif
+that never changes under them — the race window is gone rather than narrowed.
+Cost: one extra ~3 s reboot, only on the first boot after a factory reset or
+on a hub that has never been powered on. If the dataflash write fails we fall
+back to the old in-place restart instead of resetting, so a hub with dead
+flash cannot enter a reboot loop.
+
+Verified on hardware via the serial trace (`docs/poc/PRINT_VM_BENCH/
+MiniR4_WiFi_Trace.ino`, built with `-DMINIR4_WIFI_RUNTIME_DEBUG`):
+
+```
+=== BOOT ===
+[WIFIRT] MAC learned; rebooting once for a clean AP bring-up
+=== BOOT ===
+[WIFIRT] network up
+```
+
+Two boot banners, no in-place AP restart, hub discoverable afterwards.
+4 further `factory` + `reboot` cycles on the new firmware: 4/4 healthy.
+
+### Second bug, found while investigating: factory reset kept the saved VM
+
+`factoryReset()` erased only the config block, so a VM program saved to
+dataflash survived it and auto-ran on the next boot. Because a running VM
+suppresses `userLoop`, the hub would come back "factory fresh" and still
+ignore its own program — a robot that looks broken right after the one
+command the user reached for to fix it. `factoryReset()` now halts the VM,
+clears the stored program and drops any breakpoints. Verified: save →
+`stored:true` → factory → `size:0, stored:false`.
+
+---
+
+## Session 2026-07-25 (later) — USB config channel, and the battery
+
+Follow-up to the incident above, after the user reported the hub was
+unreachable **whenever the USB cable was not plugged in**.
+
+### The battery was draining all session
+
+Voltages reported by `info` over the course of the session:
+
+| When | `batt` |
+|---|---|
+| start of the session | 7.84 V |
+| mid-session | 7.68 V |
+| when the hub "could not be found at all" | **7.50 V** |
+| after ~1 h sitting on USB | **8.20 V** |
+
+The pack recovered on USB power and WiFi discovery worked immediately at
+8.17 V. That is consistent with — though not proof of — the radio browning
+out under transmit bursts on a low pack: the hub stays perfectly usable over
+USB while becoming invisible over WiFi, which is indistinguishable from a
+firmware fault unless you look at the voltage. The USB panel now surfaces the
+reading and warns below 7.6 V (heuristic, not a measured cliff).
+
+### The other half: the SSID was not what anyone was looking for
+
+A rename only reaches the AP SSID on the next power-cycle. During the
+session the hub was renamed several times, so the network on the air was
+`UsbProbe913-B0BC` while every attempt to connect was aimed at `MBR4-B0BC` —
+`netsh wlan show networks` confirmed it. A user in this state is searching
+for a network that does not exist and concludes the robot is dead.
+
+`info` now reports `"ap"` — the SSID actually being broadcast — and the USB
+panel shows it prominently plus a warning when it will change on restart.
+
+### USB config channel
+
+`MiniR4WiFiRuntime::_pollSerial()` reads NDJSON lines from `Serial` and feeds
+them to the same `_handleLine()` dispatcher used by TCP; `_sendJson()` routes
+the reply back to whichever transport the command arrived on. Consequences
+worth knowing:
+
+- Every existing command works over the cable for free, and so will every
+  future one. `ota` is the deliberate exception — it needs the network and is
+  refused with `code:-2` rather than failing obscurely inside OTAUpdate.
+- The channel is opened **before** the `WL_NO_MODULE` check in `begin()` and
+  polled **before** the `NET_DOWN` early return in `poll()`, plus inside
+  `_recoveryLoop()`. A hub with no working radio at all is still configurable.
+- Baud: the runtime opens at 115200, but a user sketch calling
+  `Serial.begin()` in userSetup runs later and wins, so the IDE probes
+  115200 then 9600.
+- Lines that are not JSON objects are ignored silently, not nacked — the
+  cable is shared with whatever the student's own sketch prints.
+
+Cost: +192 B statics for the line buffer (23036 B total, 70%, 260 B slack).
+
+Bench script: `usb_config_test.ps1`. In-app end-to-end probe:
+`usb_config_probe.js` (15 checks, including a rename applied over the cable
+and the SSID warning).

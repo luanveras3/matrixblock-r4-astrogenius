@@ -67,6 +67,66 @@ Notes on the stored network:
   falling back to the AP. To make the robot forget the stored network,
   save with an **empty SSID**.
 
+## Send VM (fast) — and what you can do while it runs
+
+Next to "Send via WiFi" there is **Send VM (fast)** (lightning icon). It
+compiles the blocks to a compact bytecode instead of a full firmware, so the
+program is on the robot in well under a second rather than ~20 s. Use it to
+iterate; use "Send via WiFi" to commit the final program.
+
+Two limits, both deliberate: the bytecode has a **3584-byte ceiling**
+(roughly 600-700 blocks) and not every block has a VM handler. The window
+tells you when a program exceeds either, and OTA has neither limit.
+
+**Keep this program on the robot.** Tick this before sending and the robot
+stores the program permanently: it runs on every power-on with no computer
+present. This is what lets you take the robot to a table with the program
+already in it. To undo, press **Forget saved** in the same window, or send a
+new program, or flash anything over USB — a reflash always clears a stored
+program rather than running it on top of a different sketch.
+
+### Live debug (bug icon)
+
+With a VM program running, open the debug panel and press **Debug on**:
+
+- the block the robot is executing **glows in the workspace**, live;
+- **Pause** freezes the program exactly where it is — variables included;
+- **Step** advances one instruction at a time;
+- **right-click any block → Add breakpoint** to make the robot stop there
+  (up to 8 at a time); the block keeps a dashed red outline;
+- the panel lists every variable with its current value.
+
+Breakpoints follow the block, not the position in the program, so they still
+work after you edit and re-send. The highlight updates about 10 times a
+second — that is a hardware limit of the robot's WiFi module, not a setting.
+
+## Prints without a cable
+
+Blocks that print to the serial monitor now also show up in the IDE's **Log**
+tab while the robot is on WiFi — no cable needed. The USB serial monitor
+keeps working exactly as before; this only adds a second destination.
+
+## USB Setup — when the robot cannot be found on WiFi
+
+The **USB Setup** button opens a panel that talks to the hub over the cable
+instead of the network. Everything the WiFi settings dialog does is there —
+rename, store or forget the classroom network, AP password, clear a saved
+program, restart, factory reset — plus the two things you actually need when
+the robot has gone missing:
+
+- **which WiFi network to join.** The robot's own network name only changes
+  when it is powered off and on again, so right after a rename or a factory
+  reset the network on the air still carries the *previous* name. The panel
+  shows the live one and tells you what it will become.
+- **the battery voltage.** A weak pack is the classic false alarm: the robot
+  works perfectly over USB and becomes unreliable or invisible over WiFi,
+  because the radio's transmit bursts sag the supply. The panel warns you
+  instead of letting you hunt for a software fault.
+
+This path does not depend on the radio at all — it works with wrong
+credentials stored, a forgotten AP password, or a WiFi module that has
+stopped answering.
+
 ## Recovery mode (un-brick without USB)
 
 If a program with an infinite loop (or a crash) makes the robot unreachable:
@@ -84,6 +144,20 @@ USB upload always keeps working regardless — it is untouched by this feature.
 | Robot in the picker but upload fails at "download" | Old bridge firmware (see First-time setup) — or the firewall blocked the IDE's local HTTP server (allow and retry). |
 | Upload OK but robot "did not come back" | It may still be flashing — wait for the OLED, then search again. In AP mode your PC sometimes hops back to another network mid-update; reconnect to `MBR4-xxxx`. |
 | Robot never answers after a bad sketch | Recovery mode (BTN_UP at power-on), then upload again. |
+| Robot's WiFi is visible and your PC joins it, but the IDE still finds nothing | Power-cycle the robot — this clears a rare modem hiccup where it answers the network but not the app. If it survives a power cycle, reflash over USB; USB never depends on the WiFi module and always works. |
+
+### What a factory reset does
+
+Holding **BTN_UP + BTN_DOWN** while powering on clears the robot's name, the
+stored WiFi network, a custom AP password, and any VM program saved on the
+robot. Two things to expect afterwards:
+
+- **The robot's WiFi name changes back to `MBR4-xxxx`.** If your PC was saved
+  onto the old name it will not reconnect on its own — pick the new network
+  from the Windows WiFi list (password `matrix2026`).
+- **The robot reboots itself once,** a few seconds after the reset. That is
+  intentional: it is how it comes back with the correct network name in one
+  clean startup. Just wait for it before searching.
 
 ## Competition note
 

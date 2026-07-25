@@ -1,0 +1,174 @@
+# OPEN BUG — blocking user code starves the runtime and makes the hub unreachable
+
+**Status:** open, root cause identified, not yet fixed.
+**Severity:** critical. It is reachable from a standard Blockly block, it
+survives power cycles, and it takes down **both** transports — WiFi *and* the
+USB config channel — so the hub looks permanently dead.
+**Reported:** 2026-07-25, with a complete reproduction.
+
+---
+
+## 1. Reproduction (user's, verbatim in effect)
+
+Upload this program to the hub (the shape matters, not the details):
+
+```cpp
+static void userLoop()
+{
+  MiniR4.OLED.print("PRESS UP");  MiniR4.OLED.display();
+  while (!MiniR4.BTN_UP.getState());              // <-- blocks here
+  MiniR4.OLED.print("RUNNING");   MiniR4.OLED.display();
+  while (!MiniR4.BTN_DOWN.getState())            // <-- and here
+  {
+    teste = 0; WiFiRuntime.logPrintln(teste);
+    teste = 1; WiFiRuntime.logPrintln(teste);
+  }
+}
+
+void loop()
+{
+  WiFiRuntime.poll();
+  if (!WiFiRuntime.isRunningVM()) { userLoop(); }
+}
+```
+
+From the moment this runs, the hub is invisible to the IDE — over WiFi and
+over USB — until it is reflashed or rescued.
+
+## 2. Root cause
+
+The runtime is **cooperatively scheduled**. `WiFiRuntime.poll()` services
+UDP discovery, the TCP command server, telemetry, the VM *and* the USB serial
+config channel, and it only runs when `loop()` comes back around.
+
+In the program above `loop()` calls `poll()` **exactly once**, then enters
+`userLoop()` and never returns: `while (!MiniR4.BTN_UP.getState());` spins
+until a human presses a button. During that spin nothing is serviced:
+
+- discovery never answers, so the robot vanishes from the picker;
+- the TCP server never accepts, so direct connects hang;
+- `_pollSerial()` never runs, so **the USB setup panel is starved too** — the
+  rescue path built for exactly this situation inherits the same flaw.
+
+### The user's own log is a direct measurement of this
+
+```
+{"t":"info",...,"uptime":74491}
+{"t":"info",...,"uptime":74653}
+{"t":"info",...,"uptime":74816}
+```
+
+Three identical `info` replies, 163 ms apart, all printed **at the moment the
+loop was stopped**. Those were requests the USB panel sent *while the hub was
+blocked*: they sat unread in the UART receive buffer and were all processed in
+one burst the instant `userLoop()` finally returned. That is starvation,
+measured — not a modem fault, not a network fault.
+
+## 3. Why it is worse than one bad sketch: a standard block emits it
+
+From `blockly-core/generator/control.js` inside the pristine asar:
+
+```js
+Blockly.Arduino['control_wait_until'] = function () {
+    const argument = Blockly.Arduino.valueToCode(this, ...) || 'false';
+    return 'while(!' + argument + ');\n';
+};
+```
+
+The **"wait until"** block compiles to a bare busy-wait with no yield. Any
+student who drags it in makes their robot unreachable. `control_repeat_until`
+(`while (!cond) { ... }`) has the same problem whenever its body contains no
+`delay`, and a `forever` loop that is not the outermost statement is equally
+fatal.
+
+## 4. What the wrapper already handles, and the exact gap
+
+`arduino_wifi_wrapper.js` was built with this failure mode in mind and covers
+two cases:
+
+| Construct | Handled? | How |
+|---|---|---|
+| `delay(N)` | yes | rewritten to `WiFiRuntime.safeDelay(N)`, which polls in ~20 ms slices |
+| a single outermost `while (true) { ... }` | yes | `stripOuterWhileTrue` unwraps it into `loop()` |
+| `while (cond);` — "wait until" | **NO** | spins with nothing to yield to |
+| `while (cond) { ...no delay... }` — "repeat until" | **NO** | same |
+| a nested or non-outermost `forever` | **NO** | only the outer one is unwrapped |
+| any hand-written blocking loop | **NO** | — |
+
+So the gap is precise: **we made waits safe but not loops.**
+
+## 5. Secondary problem, visible in the same sketch
+
+```cpp
+teste = 0; WiFiRuntime.logPrintln(teste);
+teste = 1; WiFiRuntime.logPrintln(teste);
+```
+
+`logPrintln` flushes a line to `log()`, and every outgoing frame costs a
+**synchronous ~100 ms modem write** (the ceiling that holds telemetry to
+9.4 Hz). In a tight loop this is a self-inflicted denial of service on the
+modem: the sketch generates frames far faster than the radio can drain them.
+Fixing the loop starvation alone would not make this program behave; `log()`
+needs a rate limit.
+
+## 6. Immediate workaround for the user
+
+**Hold BTN_UP while powering the hub on.** `begin()` enters `_recoveryLoop()`
+before any user code runs — the OLED shows `OTA MODE`, `userLoop` is never
+called, and the loop services discovery, TCP and (since this session) the USB
+serial channel. From there, upload a different program or use USB Setup.
+
+This is why the recovery gesture exists and it is the one path this bug cannot
+take away.
+
+## 7. Proposed fix — in priority order
+
+**A. Pump the runtime inside user loops (the real fix).**
+Extend the wrapper the same way `delay` was handled. Add a firmware helper:
+
+```cpp
+/// Services network + USB serial, never the VM, and returns `cond`
+/// unchanged so it can wrap a loop condition.
+bool tick(bool cond);
+void tick();
+```
+
+then rewrite user `while (COND)` into `while (WiFiRuntime.tick(COND))`.
+Notes for whoever implements it:
+- must **not** re-enter the VM (that is the `a9db855` stack-overflow bug);
+- `while (cond);` with an empty body needs the rewrite on the condition, which
+  the above handles naturally;
+- must not touch `while` inside comments or string literals;
+- `do { } while (cond)` and `for (;;)` need the same treatment;
+- keep `stripOuterWhileTrue` — unwrapping is still better than pumping.
+Also fix `control_wait_until` at the generator level to emit a yielding loop,
+so block-generated code is correct even outside the wrapper. Do both: the
+generator for correctness, the wrapper as the net that catches everything.
+
+**B. Rate-limit `log()`.** Cap outgoing log frames (~10/s is already twice the
+old BLE dashboard cadence), drop the excess and emit a periodic
+`"... N lines dropped"` so the student sees that output was throttled rather
+than silently losing data.
+
+**C. Compile-time warning in the IDE.** After `Blockly.Arduino.finish`, scan
+the generated sketch for blocking constructs the wrapper could not rewrite and
+warn before upload, naming the block. Cheap, and it teaches the concept.
+
+**D. Consider the RA4M1 watchdog.** A hardware WDT would reboot a truly stuck
+sketch, but it reboots *into the same sketch*, so on its own it produces a
+boot loop rather than a recovery. Only worth it combined with a "N watchdog
+resets in a row → stay in recovery mode" counter in dataflash.
+
+## 8. Note on the earlier diagnosis
+
+The 2026-07-25 incident in `POC_OTA_FINDINGS.md` ("hub pings but does not
+answer") shows the **same signature** as this bug: ICMP is answered by the
+modem autonomously, while UDP and TCP payloads need the sketch to service
+them. The modem-wedge explanation may therefore have been wrong, and the
+low battery a red herring — at the time the hub was running a user program,
+and this bug alone accounts for every observation. The MAC-persist reboot
+change made there is still correct on its own merits, but it should not be
+assumed to have fixed anything the user saw.
+
+**Test this first when the fix lands:** flash the reproduction above, confirm
+the hub stays discoverable while parked on `while (!BTN_UP)`.

@@ -10,14 +10,17 @@
  * block coverage, no size limit, but ~20 s per iteration because it
  * recompiles firmware). The VM path takes seconds per iteration —
  * perfect for the classroom "try a small change" workflow. Bytecode
- * lives entirely in RAM; a reboot or OTA wipes it. Users pick VM for
- * iteration, OTA to commit.
+ * lives in RAM by default, so a reboot or OTA wipes it; ticking "keep this
+ * program on the robot" additionally commits it to dataflash, where it
+ * survives power cycles and auto-runs at boot. Users pick VM for iteration,
+ * OTA to commit.
  *
  * Protocol (documented in MiniR4WiFiRuntime.cpp _handleVm*):
  *   {"t":"vm_start","size":N}          → server: reset, prepare to receive
  *   {"t":"vm_chunk","d":"<base64>"}    → append (many)
- *   {"t":"vm_end","run":true}          → validate & optionally auto-run
+ *   {"t":"vm_end","run":true,"save":b} → validate, optionally persist & run
  *   {"t":"vm_stop"}                    → halt VM (userLoop takes back over)
+ *   {"t":"vm_forget"}                  → drop the persisted copy
  *
  * Coordination: same pause/resume dance as OTA — window.MBR4Hud.pause()
  * releases the runtime's single TCP slot, we upload, resume() re-attaches
@@ -30,10 +33,11 @@
     }
     const { RobotClient, discover } = window.MBR4WiFi;
 
-    // Firmware ceiling: MiniR4WiFiRuntime.cpp VM_MAX_PROGRAM (4096). Keep
+    // Firmware ceiling: MiniR4WiFiRuntime.cpp VM_MAX_PROGRAM (3584). Keep
     // both in sync when changing either — the size check here is the
-    // student-facing error, the runtime's is the truth.
-    const VM_MAX_BYTES = 4096;
+    // student-facing error, the runtime's is the truth. The value is bounded
+    // by the RA4M1's static-RAM budget, not by anything on this side.
+    const VM_MAX_BYTES = 3584;
     const CHUNK_BYTES  = 96;   // encoded ~128 chars ≪ 192 B _lineBuf cap
     const TCP_PORT     = 47802;
 
@@ -64,6 +68,13 @@
             connectFail:     'Could not reach %s: %s',
             noAck:           'The robot did not ack in time (%s).',
             uploadFail:      'Upload failed at chunk %d: %s',
+            saveLabel:       'Keep this program on the robot',
+            saveHint:        'The robot stores the program and runs it on every power-on, with no computer, until you send another one or press Forget.',
+            savedOK:         'Program saved on the robot — it will run again after a power cycle.',
+            saveFail:        'Could not save the program on the robot (dataflash write failed). It is running, but a reboot will lose it.',
+            forget:          'Forget saved',
+            forgotOK:        'The robot forgot its saved program.',
+            forgetFail:      'Could not clear the saved program (%s).',
         },
         'pt-BR': {
             btnLabel:        'Enviar VM (rápido)',
@@ -90,6 +101,13 @@
             connectFail:     'Não consegui falar com %s: %s',
             noAck:           'O robô não respondeu no tempo esperado (%s).',
             uploadFail:      'Envio falhou no chunk %d: %s',
+            saveLabel:       'Guardar este programa no robô',
+            saveHint:        'O robô guarda o programa e roda a cada vez que liga, sem computador, até você enviar outro ou apertar Esquecer.',
+            savedOK:         'Programa guardado no robô — vai rodar de novo depois de desligar e ligar.',
+            saveFail:        'Não consegui guardar o programa no robô (falha ao gravar na dataflash). Ele está rodando, mas um reboot perde o programa.',
+            forget:          'Esquecer',
+            forgotOK:        'O robô esqueceu o programa guardado.',
+            forgetFail:      'Não consegui apagar o programa guardado (%s).',
         },
     };
     function locale() {
@@ -140,6 +158,29 @@
     // --- Upload orchestration ------------------------------------------------
     let busy = false;
 
+    // "Keep this program on the robot": vm_end carries save:true, the runtime
+    // writes the bytecode to dataflash and auto-runs it at every power-on
+    // until a reflash (new sketch id) or an explicit forget. Off by default —
+    // the fast path is meant to be disposable, and a program that silently
+    // outlives the session is a surprise, not a feature.
+    let saveOnRobot = false;
+
+    // Latest compile result, shared with the live debugger (wifi_vm_debug.js)
+    // so it can resolve pc frames to blocks without recompiling.
+    function publishCompiled(compiled, robot) {
+        window.MBR4VMState = {
+            blockMap:  compiled.blockMap || [],
+            variables: compiled.variables || {},
+            size:      compiled.bytes ? compiled.bytes.length : 0,
+            robot:     robot || null,
+            at:        Date.now(),
+        };
+        if (window.MBR4VMDebug && window.MBR4VMDebug.onProgramUploaded) {
+            try { window.MBR4VMDebug.onProgramUploaded(window.MBR4VMState); }
+            catch (e) { console.warn('[VM] debugger hook:', e); }
+        }
+    }
+
     async function sendVmTo(robot, ui) {
         const t0 = Date.now();
         ui.phase(tr('phase_compile'));
@@ -155,6 +196,10 @@
         const bytes    = compiled.bytes;
         const varCount = Object.keys(compiled.variables || {}).length;
         ui.log(fmt(tr('compiledOK'), bytes.length, varCount), 'ok');
+        // Hand the source map to the live debugger before the upload starts:
+        // the robot may report a pc the moment the program runs, and a frame
+        // arriving with no map loaded would just be dropped.
+        publishCompiled(compiled, robot);
         if (compiled.warnings && compiled.warnings.length) {
             ui.log(fmt(tr('unsupported'), compiled.warnings.length), 'error');
             compiled.warnings.forEach((w) => console.warn('[VM] skipped:', w));
@@ -200,12 +245,19 @@
                 ui.phase(fmt(tr('phase_chunk'), pct, done, bytes.length), pct);
             }
 
-            // vm_end with run:true — one round-trip instead of two
+            // vm_end with run:true — one round-trip instead of two.
+            // save:true additionally commits the program to dataflash; the
+            // ack echoes "saved" so we can tell the user it really landed
+            // (a dataflash write can fail where the transfer succeeded).
             ui.phase(tr('phase_run'), 100);
             const endAck = await client.request(
-                { t: 'vm_end', run: true },
-                (o) => o.t === 'ack' && (o.cmd === 'vm_end' || o.cmd === 'vm_run'), 4000);
+                { t: 'vm_end', run: true, save: saveOnRobot },
+                (o) => o.t === 'ack' && (o.cmd === 'vm_end' || o.cmd === 'vm_run'), 6000);
             if (!endAck.ok) throw new Error('vm_end rejected: ' + (endAck.err || ''));
+            if (saveOnRobot) {
+                ui.log(endAck.saved ? tr('savedOK') : tr('saveFail'),
+                       endAck.saved ? 'ok' : 'error');
+            }
 
             const dtMs  = Date.now() - t0;
             const bps   = Math.round(bytes.length / (dtMs / 1000));
@@ -232,6 +284,25 @@
         }
     }
 
+    // Clear the stored program so the hub goes back to booting into its
+    // native sketch. Deliberately does NOT stop the VM currently running:
+    // "stop what it is doing now" and "stop doing this every time you turn
+    // on" are different intents and get different buttons.
+    async function forgetVmOn(robot, ui) {
+        const client = new RobotClient(robot.ip);
+        try {
+            await client.connect(4000);
+            const ack = await client.request({ t: 'vm_forget' },
+                (o) => o.t === 'ack' && o.cmd === 'vm_forget', 4000);
+            ui.log(ack.ok ? tr('forgotOK') : fmt(tr('forgetFail'), ack.err || ''),
+                   ack.ok ? 'ok' : 'error');
+        } catch (e) {
+            ui.log(fmt(tr('forgetFail'), e.message), 'error');
+        } finally {
+            client.close();
+        }
+    }
+
     // --- Modal UI ------------------------------------------------------------
     let modalEl = null;
     function ensureModal() {
@@ -251,6 +322,14 @@
                 '<button id="vmModalClose" type="button" style="background:none;border:0;font-size:20px;cursor:pointer;color:#555;">&times;</button>' +
               '</div>' +
               '<div id="vmRobotList"></div>' +
+              '<label id="vmSaveRow" style="display:flex;gap:8px;align-items:flex-start;' +
+                'margin:4px 0 2px;cursor:pointer;">' +
+                '<input type="checkbox" id="vmSaveCheck" style="margin-top:3px;">' +
+                '<span>' +
+                  '<span id="vmSaveLabel" style="font-weight:600;"></span>' +
+                  '<span id="vmSaveHint" style="display:block;font-size:12px;color:#666;"></span>' +
+                '</span>' +
+              '</label>' +
               '<div id="vmProgressWrap" style="display:none;margin:12px 0;">' +
                 '<div id="vmPhaseText" style="font-weight:600;margin-bottom:6px;"></div>' +
                 '<div style="background:#e5e7eb;border-radius:6px;height:10px;overflow:hidden;">' +
@@ -265,6 +344,15 @@
               '</div>' +
             '</div>';
         document.body.appendChild(modalEl);
+        const saveCheck = document.getElementById('vmSaveCheck');
+        // Remembered across sessions: a teacher who works this way once
+        // usually works this way every time.
+        try { saveOnRobot = localStorage.getItem('mbr4.vm.save') === '1'; } catch (_) {}
+        saveCheck.checked = saveOnRobot;
+        saveCheck.addEventListener('change', () => {
+            saveOnRobot = saveCheck.checked;
+            try { localStorage.setItem('mbr4.vm.save', saveOnRobot ? '1' : '0'); } catch (_) {}
+        });
         modalEl.addEventListener('click', (ev) => { if (ev.target === modalEl && !busy) closeModal(); });
         document.getElementById('vmModalClose').addEventListener('click', () => { if (!busy) closeModal(); });
         document.getElementById('vmModalCancel').addEventListener('click', () => { if (!busy) closeModal(); });
@@ -310,6 +398,13 @@
             '<div style="font-weight:600;">' + escapeHtml(robot.name || robot.ip) + '</div>' +
             '<div style="font-size:12px;color:#666;">' + escapeHtml(robot.ip) + ' · fw ' +
                 escapeHtml(robot.fw || '?') + '</div>';
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.textContent = tr('forget');
+        forget.style.cssText =
+            'padding:6px 10px;border:1px solid #94a3b8;background:#fff;color:#475569;' +
+            'border-radius:4px;cursor:pointer;';
+        forget.addEventListener('click', () => driveAction(robot, forgetVmOn));
         const stop = document.createElement('button');
         stop.type = 'button';
         stop.textContent = tr('stop');
@@ -325,6 +420,7 @@
             'border-radius:4px;cursor:pointer;font-weight:600;';
         send.addEventListener('click', () => driveAction(robot, sendVmTo));
         row.appendChild(info);
+        row.appendChild(forget);
         row.appendChild(stop);
         row.appendChild(send);
         return row;
@@ -336,6 +432,7 @@
         busy = true;
         const ui = modalUi();
         document.getElementById('vmRobotList').style.display = 'none';
+        document.getElementById('vmSaveRow').style.display = 'none';
         document.getElementById('vmProgressWrap').style.display = 'none';
         if (window.MBR4Hud) await window.MBR4Hud.pause();
         try {
@@ -347,6 +444,8 @@
             if (window.MBR4Hud) window.MBR4Hud.resume();
             const list = document.getElementById('vmRobotList');
             if (list) list.style.display = 'block';
+            const saveRow = document.getElementById('vmSaveRow');
+            if (saveRow) saveRow.style.display = 'flex';
         }
     }
 
@@ -383,6 +482,8 @@
         };
         set('vmModalTitle',  'modalTitle');
         set('vmModalCancel', 'close');
+        set('vmSaveLabel',   'saveLabel');
+        set('vmSaveHint',    'saveHint');
         const span = document.getElementById('vmUploadButton');
         if (span) span.innerHTML = '&nbsp;' + tr('btnLabel');
         const link = document.getElementById('vmUploadNavLink');
@@ -423,7 +524,13 @@
         }
     }
 
-    window.MBR4VM = { openModal, _sendVmTo: sendVmTo, _stopVmOn: stopVmOn };
+    window.MBR4VM = {
+        openModal,
+        _sendVmTo:   sendVmTo,
+        _stopVmOn:   stopVmOn,
+        _forgetVmOn: forgetVmOn,
+        _maxBytes:   VM_MAX_BYTES,
+    };
 
     console.log('[VM] wifi_vm_upload.js module loaded');
     if (document.readyState === 'loading') {

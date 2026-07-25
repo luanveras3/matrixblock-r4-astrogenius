@@ -12,6 +12,23 @@
 
 ---
 
+> **Status update 2026-07-25.** Sections 4 (Fase 4 HUD), 5 (acceptance, minus
+> the two-hub and blocking-sketch items) and 7 (VM over TCP) are **done and
+> hardware-validated** — see `CHANGELOG.md` and the "Session 2026-07-25"
+> section of `docs/POC_OTA_FINDINGS.md`. The VM also gained live block
+> debugging and dataflash persistence, and `ROADMAP.md` R2/R3 are closed.
+>
+> **What is actually left:** §6 (release) and roadmap items R1, R4–R10.
+> Two small hardware checks remain from §5: the two-robot picker (needs a
+> second hub) and the BTN_UP rescue of a deliberately-blocking sketch.
+>
+> Read §2 and §3 below regardless — the environment map and the hardware
+> gotchas are still accurate and still the things that waste a session.
+> One correction to §7: the VM ceiling is **3584 bytes**, not 4-6 KB, and
+> the static-RAM budget is the binding constraint (23296 bytes for
+> everything static; overflowing it is a hard link error). New bench tool:
+> `node tools/hubctl.js discover` / `<ip> info|send|vmload|watch`.
+
 ## 1. Current state (as of commit `b9000a9`)
 
 Everything below is implemented, hardware-validated on a real hub, and

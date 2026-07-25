@@ -83,6 +83,12 @@ Blockly.BytecodeVM.init = function (workspace) {
     this._procCode = '';        // proc bodies appended after HALT
     this._currentProc = null;   // set while emitting a definition body so
                                 // argument reporters can resolve arg -> slot
+    // Live-debug support: block ids in emission order. scrub_ emits a
+    // `B:<index>` marker token per statement block and the assembler turns
+    // each marker into a { pc, blockId } entry. Indices (not the ids
+    // themselves) go in the token stream because Blockly's generated ids may
+    // contain ':' and ';', which the tokenizer uses as syntax.
+    this._blockIds = [];
     if (workspace && typeof workspace.getTopBlocks === 'function') {
         this._scanProcs(workspace);
     }
@@ -196,7 +202,27 @@ Blockly.BytecodeVM.scrub_ = function (block, code) {
     if (code === null) return '';
     const next = block.nextConnection && block.nextConnection.targetBlock();
     const nextCode = this.blockToCode(next) || '';
-    return code + nextCode;
+    return this.blockMarker(block) + code + nextCode;
+};
+
+/**
+ * Emit a source marker for the live debugger, or '' when there is nothing
+ * useful to mark.
+ *
+ * Only statement blocks are marked (`outputConnection` is null). Value blocks
+ * would also produce valid entries — their operands are pushed before the
+ * statement's opcode — but highlighting a number reporter as "the running
+ * block" is noise, not information: the student thinks in statements.
+ *
+ * The marker occupies no bytes in the program; it is a compile-time
+ * annotation the assembler strips.
+ */
+Blockly.BytecodeVM.blockMarker = function (block) {
+    if (!block || block.outputConnection || !block.id) return '';
+    if (!this._blockIds) this._blockIds = [];
+    const index = this._blockIds.length;
+    this._blockIds.push(block.id);
+    return 'B:' + index + ' ';
 };
 
 // --- finish / compile -------------------------------------------------------
@@ -216,10 +242,16 @@ Blockly.BytecodeVM.finish = function (code) {
 };
 
 /**
- * Compile a workspace to bytecode. Returns { bytes, warnings, variables }.
- * bytes:     Uint8Array — ready to send over BLE via START/CHUNK/END.
+ * Compile a workspace to bytecode.
+ * Returns { bytes, warnings, variables, blockMap }.
+ * bytes:     Uint8Array — ready to send via vm_start/vm_chunk/vm_end.
  * warnings:  array of { block, msg } — unsupported blocks the emitter skipped.
- * variables: { name -> slot } — for debugging the UI.
+ * variables: { name -> slot } — for the debugger's variable panel.
+ * blockMap:  array of { pc, blockId }, ascending by pc — resolves a program
+ *            counter reported by the robot back to the block that produced
+ *            it. This map never leaves the IDE: the hub streams raw pcs, the
+ *            editor does the lookup. That keeps the wire format independent
+ *            of how the compiler evolves and costs the firmware nothing.
  */
 Blockly.BytecodeVM.compile = function (workspace) {
     const tokens = this.workspaceToCode(workspace);
@@ -228,7 +260,32 @@ Blockly.BytecodeVM.compile = function (workspace) {
         bytes: bytes,
         warnings: this._warnings.slice(),
         variables: Object.assign({}, this._varSlots),
+        blockMap: (this._blockMap || []).slice(),
     };
+};
+
+/**
+ * Resolve a program counter to the block that emitted it.
+ *
+ * The map holds the pc where each block's code *starts*, so the block
+ * covering `pc` is the last entry at or before it — a plain descending scan
+ * would be O(n); binary search keeps this cheap enough to run on every
+ * incoming pc frame.
+ *
+ * @param {Array<{pc:number, blockId:string}>} map from compile().
+ * @param {number} pc program counter reported by the robot.
+ * @return {?string} block id, or null when pc precedes the first block
+ *     (setup preamble) or the map is empty.
+ */
+Blockly.BytecodeVM.blockAtPc = function (map, pc) {
+    if (!map || !map.length || !(pc >= 0)) return null;
+    let lo = 0, hi = map.length - 1, found = -1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (map[mid].pc <= pc) { found = mid; lo = mid + 1; }
+        else { hi = mid - 1; }
+    }
+    return found < 0 ? null : map[found].blockId;
 };
 
 // --- Two-pass assembler -----------------------------------------------------
@@ -242,11 +299,27 @@ Blockly.BytecodeVM._assemble = function (text) {
     const labels = Object.create(null);
     const patches = [];   // { kind: 'REL16'|'ABS16', name, at }
     const bytes = [];
+    const blockMap = [];  // { pc, blockId } in ascending pc order
 
     for (let i = 0; i < tokens.length; i++) {
         const tok = tokens[i];
         if (tok.charAt(0) === 'L' && tok.charAt(1) === ':') {
             labels[tok.slice(2).replace(/;$/, '')] = bytes.length;
+            continue;
+        }
+        // Source marker from scrub_ — records where a block's code begins.
+        // Must be handled before the hex fallback: parseInt('B:3', 16) would
+        // happily return 11 and silently corrupt the program.
+        if (tok.charAt(0) === 'B' && tok.charAt(1) === ':') {
+            const idx = parseInt(tok.slice(2).replace(/;$/, ''), 10);
+            const id = this._blockIds && this._blockIds[idx];
+            // pcs come out non-decreasing for free: we walk the final token
+            // stream once and bytes.length only grows. (finish() has already
+            // moved procedure bodies after HALT by this point, so generation
+            // order never leaks in.) That is what blockAtPc's binary search
+            // relies on. Blocks that emit no bytes share a pc with the next
+            // one; the later entry wins, which is the right answer.
+            if (id) blockMap.push({ pc: bytes.length, blockId: id });
             continue;
         }
         // JMP / JMP_IF / JMP_IF_NOT / CALL
@@ -312,5 +385,6 @@ Blockly.BytecodeVM._assemble = function (text) {
         throw err;
     }
 
+    this._blockMap = blockMap;
     return new Uint8Array(bytes);
 };

@@ -1230,10 +1230,33 @@
                 // distinct from our own [HUD] status lines.
                 appendLogLine({ msg: '> ' + o.s, kind: 'robot', ts: Date.now() });
             }
+            dispatchFrame(o);
         };
         // Ask for the stream + push initial DHT mask (opt-in ports only).
         try { client.send({ t: 'telemetry', on: true, hz: 10 }); } catch (_) {}
         sendDhtEnableMask();
+        dispatchConnect();
+    }
+
+    // --- Shared-socket bus ---------------------------------------------------
+    // The runtime accepts exactly ONE TCP client, so every feature that needs
+    // live frames (telemetry HUD, VM live debugger, future panels) has to ride
+    // this connection rather than opening its own. Subscribers get every
+    // incoming frame; onConnect fires after each successful (re)connect so a
+    // subscriber can re-arm robot-side state it owns — the hub forgets
+    // everything when the socket drops.
+    const frameSubs   = [];
+    const connectSubs = [];
+
+    function dispatchFrame(o) {
+        for (let i = 0; i < frameSubs.length; i++) {
+            try { frameSubs[i](o); } catch (e) { console.warn('[HUD] subscriber:', e); }
+        }
+    }
+    function dispatchConnect() {
+        for (let i = 0; i < connectSubs.length; i++) {
+            try { connectSubs[i](); } catch (e) { console.warn('[HUD] onConnect:', e); }
+        }
     }
 
     function sendDhtEnableMask() {
@@ -1352,21 +1375,41 @@
     window.MBR4Hud = {
         pause:  pauseHud,     // await this before opening your own RobotClient
         resume: resumeHud,    // call this when done — HUD auto-reconnects
-        _parseTelemetryFrame: parseTelemetryFrame,
-        _mounted:  () => hudMounted,
-        _connected:() => hudConnected,
-        _paused:   () => hudPaused,
-        _openPicker: openHudPicker,
-        // Test/tools hook: send a raw NDJSON object through the HUD's own
-        // socket. Silently drops if the HUD isn't connected. Used by
-        // r3_hud_probe (echo command) and available for any diagnostic
-        // script that wants to reuse the live connection instead of
-        // fighting for the single-client TCP slot.
-        _send: (obj) => {
+
+        // --- Shared-socket API (see the bus above) --------------------------
+        /** Send an NDJSON object on the HUD's socket. false = not connected. */
+        send: (obj) => {
             if (hudClient && hudConnected) {
                 try { hudClient.send(obj); return true; } catch (_) {}
             }
             return false;
         },
+        /** Subscribe to every incoming frame. Returns an unsubscribe fn. */
+        onFrame: (fn) => {
+            frameSubs.push(fn);
+            return () => {
+                const i = frameSubs.indexOf(fn);
+                if (i >= 0) frameSubs.splice(i, 1);
+            };
+        },
+        /** Run fn after each successful (re)connect. Returns unsubscribe. */
+        onConnect: (fn) => {
+            connectSubs.push(fn);
+            if (hudConnected) { try { fn(); } catch (_) {} }
+            return () => {
+                const i = connectSubs.indexOf(fn);
+                if (i >= 0) connectSubs.splice(i, 1);
+            };
+        },
+        isConnected: () => hudConnected,
+
+        _parseTelemetryFrame: parseTelemetryFrame,
+        _mounted:  () => hudMounted,
+        _connected:() => hudConnected,
+        _paused:   () => hudPaused,
+        _openPicker: openHudPicker,
+        // Legacy alias of send() kept for the existing probe scripts
+        // (r3_hud_probe and friends call _send).
+        _send: (obj) => window.MBR4Hud.send(obj),
     };
 })();

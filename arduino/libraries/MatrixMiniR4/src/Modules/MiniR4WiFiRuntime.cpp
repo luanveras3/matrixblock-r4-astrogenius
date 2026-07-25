@@ -30,6 +30,10 @@ namespace {
 
 constexpr uint16_t UDP_DISCOVERY_PORT = 47801;
 constexpr uint16_t TCP_COMMAND_PORT   = 47802;
+// Baud the runtime opens the USB config channel with. The IDE probes this
+// first and then 9600, the baud the Serial block emits, because a user sketch
+// re-begins Serial after us and wins.
+constexpr uint32_t SERIAL_CONFIG_BAUD = 115200;
 constexpr const char* AP_PASSWORD     = "matrix2026";
 constexpr uint32_t STA_JOIN_TIMEOUT_MS  = 10000;  ///< per begin() attempt
 constexpr uint32_t STA_RETRY_INTERVAL_MS = 30000; ///< re-try cadence in poll()
@@ -82,13 +86,51 @@ constexpr uint8_t TELEMETRY_BYTES = 82;
 // programs the BLE branch shipped, and matches the "ceiling" documented there
 // (block density ~5-6 B/block → ~900-1000 blocks).
 // Baseline runtime uses ~18 KB SRAM (WiFiS3 + Adafruit_SSD1306 + MiniR4
-// buffers). Empirical: 5 KB VM buffer overflowed the heap↔stack boundary
-// by ~900 B on Renesas RA4M1 (32 KB SRAM). 4 KB gives ~24 KB total used
-// with the linker still leaving comfortable stack headroom, and covers
-// ~600-800 real Blockly blocks (5-6 B/block density measured on BLE).
-constexpr uint16_t VM_MAX_PROGRAM = 4096;
+// buffers). The static budget is hard and small: UNOWIFIR4's linker script
+// reserves a FIXED 8 KB heap (BSP_CFG_HEAP_BYTES) and a FIXED 1 KB main
+// stack (BSP_CFG_STACK_MAIN_BYTES) out of 32 KB, minus a 256-byte vector
+// table — so everything static must fit in 23296 bytes, and going over is
+// a hard link error ("section .stack_dummy overlaps section .heap"), not a
+// warning. Measured: 5 KB overflowed by ~900 B; 4 KB left only 106 B of
+// slack, which the R3 v2 line buffer and the debug state consumed. 3584 B
+// restores ~450 B of slack and still covers ~600-700 real Blockly blocks at
+// the 5-6 B/block density measured on the BLE branch. Programs bigger than
+// that belong on the OTA path, which has no ceiling at all.
+constexpr uint16_t VM_MAX_PROGRAM = 3584;
 alignas(4) uint8_t g_vmProgram[VM_MAX_PROGRAM];
 constexpr uint8_t  VM_STEPS_PER_POLL = 32;
+
+// --- Saved VM record (blocks 1..5, magic 'MBVM') -----------------------------
+// A saved program lets the hub leave the classroom running the student's
+// blocks with no notebook: boot → load → run. Layout (little-endian):
+//   0..3    'M','B','V','M'
+//   4..5    program size (u16, 1..VM_MAX_PROGRAM)
+//   6..7    CRC-16/CCITT-FALSE over the program bytes
+//   8..11   sketch id the program was uploaded against (0 = "any")
+//   12..15  reserved (0xFF)
+//   16..    program bytes
+// 16 + 3584 = 3600 bytes spans four 1 KB blocks. The CRC is what makes a
+// half-written record (power cut mid-save) safe: it fails validation and the
+// hub simply boots with no program instead of executing garbage.
+constexpr uint32_t VM_STORE_ADDR    = 1 * DATAFLASH_BLOCK;   // block 1
+constexpr uint8_t  VM_STORE_BLOCKS  = 4;                     // blocks 1..4
+constexpr uint32_t VM_STORE_HEADER  = 16;
+constexpr uint8_t  VM_STORE_MAGIC[4] = {'M', 'B', 'V', 'M'};
+
+// CRC-16/CCITT-FALSE. Chosen over a checksum because a stuck flash bit is
+// exactly the failure a sum can miss.
+uint16_t crc16(const uint8_t* data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t b = 0; b < 8; b++) {
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
+                                 : (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
 
 WiFiUDP    g_udp;
 WiFiServer g_server(TCP_COMMAND_PORT);
@@ -246,6 +288,9 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _nameCustom(false)
     , _lastStaRetryMs(0)
     , _lineLen(0)
+    , _serialLen(0)
+    , _replyToSerial(false)
+    , _logLineLen(0)
     , _tmOn(false)
     , _tmIntervalMs(100)
     , _tmLastMs(0)
@@ -255,6 +300,20 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _vmRxExpected(0)
     , _vmRxOffset(0)
     , _vmReceiving(false)
+    , _sketchId(0)
+    , _vmStored(false)
+    , _vmDebugOn(false)
+    , _vmPaused(false)
+    , _vmStepOnce(false)
+    // 10 Hz, not the 20 the roadmap sketched: every outgoing frame costs a
+    // synchronous ~100 ms modem write on this platform (the same ceiling
+    // that caps telemetry at ~9.4 Hz), and the pc stream shares that budget
+    // with telemetry. 10 Hz already reads as "live" for block highlighting.
+    , _vmPcIntervalMs(100)
+    , _vmPcLastMs(0)
+    , _vmPcLastSent(0xFFFF)
+    , _vmBreakCount(0)
+    , _vmBpArmed(true)
 {
     // FULL zero of the char buffers, not just [0]='\0'. Any read past the
     // first byte (jsonEscape iterating on stale bytes after a bad length
@@ -267,6 +326,10 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     memset(_ssid,  0, sizeof(_ssid));
     memset(_pass,  0, sizeof(_pass));
     memset(_apPass, 0, sizeof(_apPass));
+    memset(_apSsid, 0, sizeof(_apSsid));
+    memset(_serialBuf, 0, sizeof(_serialBuf));
+    memset(_logLine, 0, sizeof(_logLine));
+    memset(_vmBreak, 0, sizeof(_vmBreak));
     _macCache[0] = _macCache[1] = 0xFF;
     strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
     _apPassCustom = false;
@@ -279,8 +342,18 @@ void MiniR4WiFiRuntimeClass::begin()
     if (_begun) return;
     _begun = true;
 
+    // Bring the USB config channel up FIRST, before anything that can fail.
+    // Everything below this line depends on the WiFi module; the cable does
+    // not, and a hub whose radio is misconfigured or unresponsive must still
+    // be recoverable from the IDE without reflashing it.
+    //
+    // A user sketch is free to call Serial.begin() again with its own baud
+    // (the wrapper runs userSetup() after us) — the channel simply follows
+    // whatever baud ends up set, which is why the IDE probes both.
+    Serial.begin(SERIAL_CONFIG_BAUD);
+
     if (WiFi.status() == WL_NO_MODULE) {
-        WIFIRT_TRACE(F("no WiFi module; runtime disabled"));
+        WIFIRT_TRACE(F("no WiFi module; serial config channel only"));
         return;
     }
 
@@ -311,11 +384,26 @@ void MiniR4WiFiRuntimeClass::begin()
     if (recovery) {
         _recoveryLoop();   // never returns
     }
+
+    // Restore a saved VM program and start it (R2 v2 — "leave the notebook
+    // behind"). Deliberately AFTER the recovery check: BTN_UP at power-on
+    // still rescues a hub whose saved bytecode misbehaves, because recovery
+    // never reaches this line. While the restored program runs the wrapper
+    // skips userLoop, exactly as it does for a freshly uploaded VM.
+    if (_loadVmProgram()) {
+        _vm.loadProgram(g_vmProgram, _vmProgramSize);
+        _vm.reset();
+        WIFIRT_TRACE(F("saved VM program restored"));
+    }
 }
 
 void MiniR4WiFiRuntimeClass::poll()
 {
     if (!_begun) return;
+
+    // Before the network guard, always: the USB channel is the fallback for
+    // exactly the situation where the network is down.
+    _pollSerial();
 
     if (_netMode == NET_DOWN) {
         // Periodic STA re-try (e.g. router came back after a power cut).
@@ -361,6 +449,8 @@ void MiniR4WiFiRuntimeClass::_handleVmStart(long size)
     _vmRxExpected  = (uint16_t)size;
     _vmRxOffset    = 0;
     _vmReceiving   = true;
+    _vmPaused      = false;   // a new upload always starts clean
+    _vmStepOnce    = false;
     _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_start\",\"ok\":true}");
 }
 
@@ -389,7 +479,7 @@ void MiniR4WiFiRuntimeClass::_handleVmChunk(const char* b64)
     _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_chunk\",\"ok\":true,\"off\":%u}", _vmRxOffset);
 }
 
-void MiniR4WiFiRuntimeClass::_handleVmEnd()
+void MiniR4WiFiRuntimeClass::_handleVmEnd(bool save)
 {
     if (!_vmReceiving) {
         _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_end\",\"ok\":false,\"err\":\"not receiving\"}");
@@ -402,7 +492,10 @@ void MiniR4WiFiRuntimeClass::_handleVmEnd()
     }
     _vmProgramSize = _vmRxOffset;
     _vmReceiving   = false;
-    _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_end\",\"ok\":true,\"size\":%u}", _vmProgramSize);
+    const bool saved = save ? _saveVmProgram() : false;
+    _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_end\",\"ok\":true,\"size\":%u,\"saved\":%s}",
+              _vmProgramSize, saved ? "true" : "false");
+    if (save && !saved) log("VM save FAILED (dataflash)");
 }
 
 void MiniR4WiFiRuntimeClass::_handleVmRun()
@@ -413,6 +506,13 @@ void MiniR4WiFiRuntimeClass::_handleVmRun()
     }
     _vm.loadProgram(g_vmProgram, _vmProgramSize);
     _vm.reset();
+    // A fresh run always starts unpaused with breakpoints live again —
+    // otherwise "Run" after a paused session would appear to do nothing.
+    // Armed breakpoints themselves survive: the student set them on purpose.
+    _vmPaused     = false;
+    _vmStepOnce   = false;
+    _vmBpArmed    = true;
+    _vmPcLastSent = 0xFFFF;
     // loadProgram + reset leaves _running=true (VM starts on the first
     // step()); the poll loop below drives it.
     _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_run\",\"ok\":true}");
@@ -421,10 +521,70 @@ void MiniR4WiFiRuntimeClass::_handleVmRun()
     log(buf);
 }
 
+bool MiniR4WiFiRuntimeClass::_vmIsBreakpoint(uint16_t pc) const
+{
+    for (uint8_t i = 0; i < _vmBreakCount; i++) {
+        if (_vmBreak[i] == pc) return true;
+    }
+    return false;
+}
+
+void MiniR4WiFiRuntimeClass::_sendPcFrame(bool force)
+{
+    if (!_vmDebugOn) return;
+    const uint16_t pc  = _vm.pc();
+    const uint32_t now = millis();
+    if (!force) {
+        if (now - _vmPcLastMs < _vmPcIntervalMs) return;
+        if (pc == _vmPcLastSent) return;   // parked on the same instruction
+    }
+    _vmPcLastMs   = now;
+    _vmPcLastSent = pc;
+    _sendJson("{\"t\":\"pc\",\"addr\":%u,\"run\":%d}",
+              (unsigned)pc, _vmPaused ? 0 : 1);
+}
+
+void MiniR4WiFiRuntimeClass::_sendVarsFrame()
+{
+    // Worst case 17 + 16*11 + 15 + 2 = 210 bytes, inside _sendJson's frame.
+    char buf[240];
+    int o = snprintf(buf, sizeof(buf), "{\"t\":\"vars\",\"v\":[");
+    for (uint8_t i = 0; i < MiniR4VM::VAR_COUNT && o > 0 && o < (int)sizeof(buf); i++) {
+        o += snprintf(buf + o, sizeof(buf) - o, "%s%ld",
+                      i ? "," : "", (long)_vm.varAt(i));
+    }
+    if (o > 0 && o < (int)sizeof(buf)) snprintf(buf + o, sizeof(buf) - o, "]}");
+    _sendJson("%s", buf);
+}
+
 void MiniR4WiFiRuntimeClass::_pollVm()
 {
     if (!_vm.isRunning()) return;
+
+    // Paused: keep reporting where we are (the IDE may have just connected
+    // and needs to know which block is highlighted) but execute nothing.
+    if (_vmPaused && !_vmStepOnce) {
+        _sendPcFrame(false);
+        return;
+    }
+
     for (uint8_t i = 0; i < VM_STEPS_PER_POLL; i++) {
+        // Breakpoint test runs BEFORE the instruction at that pc, so the
+        // block the IDE highlights is the one about to execute — matching
+        // what a student expects from "stop here". _vmBpArmed is cleared on
+        // resume/step so we don't immediately re-trigger on the same pc.
+        if (_vmBpArmed && _vmIsBreakpoint(_vm.pc())) {
+            _vmPaused   = true;
+            _vmStepOnce = false;
+            _sendPcFrame(true);
+            char buf[48];
+            snprintf(buf, sizeof(buf), "VM paused at breakpoint pc=%u",
+                     (unsigned)_vm.pc());
+            log(buf);
+            return;
+        }
+        _vmBpArmed = true;
+
         const auto r = _vm.step();
         if (r != MiniR4VM::Result::OK) {
             // Report termination once — HALTED is the normal exit path
@@ -437,10 +597,107 @@ void MiniR4WiFiRuntimeClass::_pollVm()
                 snprintf(buf, sizeof(buf), "VM error %d at pc=%u",
                          (int)r, (unsigned)_vm.pc());
             }
+            _sendPcFrame(true);
             log(buf);
             return;
         }
+
+        if (_vmStepOnce) {           // single-step consumed
+            _vmStepOnce = false;
+            _vmPaused   = true;
+            _sendPcFrame(true);
+            return;
+        }
     }
+    _sendPcFrame(false);
+}
+
+// --- VM persistence ---------------------------------------------------------
+
+bool MiniR4WiFiRuntimeClass::_saveVmProgram()
+{
+    if (_vmProgramSize == 0 || _vmProgramSize > VM_MAX_PROGRAM) return false;
+
+    alignas(4) uint8_t header[VM_STORE_HEADER];
+    memset(header, 0xFF, sizeof(header));
+    memcpy(header, VM_STORE_MAGIC, 4);
+    header[4] = (uint8_t)(_vmProgramSize & 0xFF);
+    header[5] = (uint8_t)(_vmProgramSize >> 8);
+    const uint16_t crc = crc16(g_vmProgram, _vmProgramSize);
+    header[6] = (uint8_t)(crc & 0xFF);
+    header[7] = (uint8_t)(crc >> 8);
+    header[8]  = (uint8_t)(_sketchId & 0xFF);
+    header[9]  = (uint8_t)(_sketchId >> 8);
+    header[10] = (uint8_t)(_sketchId >> 16);
+    header[11] = (uint8_t)(_sketchId >> 24);
+
+    for (uint8_t b = 0; b < VM_STORE_BLOCKS; b++) {
+        if (g_flash.erase(VM_STORE_ADDR + b * DATAFLASH_BLOCK,
+                          DATAFLASH_BLOCK) != 0) return false;
+    }
+    // Program bytes first, header last. A power cut between the two leaves
+    // no valid magic, so the next boot reads "nothing saved" instead of a
+    // truncated program whose CRC happens to be uncheckable.
+    // Round up to the flash's 4-byte program unit; the padding is read back
+    // but never CRC'd (the header's size field bounds the real program).
+    const uint32_t progAligned = ((uint32_t)_vmProgramSize + 3u) & ~3u;
+    if (g_flash.program(g_vmProgram, VM_STORE_ADDR + VM_STORE_HEADER,
+                        progAligned) != 0) return false;
+    if (g_flash.program(header, VM_STORE_ADDR, VM_STORE_HEADER) != 0) return false;
+
+    _vmStored = true;
+    return true;
+}
+
+bool MiniR4WiFiRuntimeClass::_loadVmProgram()
+{
+    alignas(4) uint8_t header[VM_STORE_HEADER];
+    if (g_flash.read(header, VM_STORE_ADDR, VM_STORE_HEADER) != 0) return false;
+    if (memcmp(header, VM_STORE_MAGIC, 4) != 0) return false;
+
+    const uint16_t size = (uint16_t)header[4] | ((uint16_t)header[5] << 8);
+    if (size == 0 || size > VM_MAX_PROGRAM) return false;
+    const uint16_t crc = (uint16_t)header[6] | ((uint16_t)header[7] << 8);
+    const uint32_t id  = (uint32_t)header[8]         |
+                         ((uint32_t)header[9]  << 8) |
+                         ((uint32_t)header[10] << 16) |
+                         ((uint32_t)header[11] << 24);
+
+    const uint32_t progAligned = ((uint32_t)size + 3u) & ~3u;
+    if (g_flash.read(g_vmProgram, VM_STORE_ADDR + VM_STORE_HEADER,
+                     progAligned) != 0) return false;
+    if (crc16(g_vmProgram, size) != crc) return false;
+
+    // A saved program belongs to exactly the sketch it was uploaded against.
+    // After a USB/OTA reflash the ids differ: drop it rather than run
+    // yesterday's blocks on top of a program the student has since replaced.
+    //
+    // Exact equality, with no "0 means any sketch" escape hatch: an earlier
+    // cut treated a stored 0 as a wildcard so that id-less bench sketches
+    // could still run saved programs, and hardware promptly showed why that
+    // is wrong — a program saved by the standalone runtime example was
+    // adopted by the next, completely unrelated sketch flashed over USB, and
+    // its userLoop never ran because the VM had taken over. A sketch with no
+    // declared id (0) still matches programs it saved itself, which is all
+    // the bench case ever needed.
+    if (id != _sketchId) {
+        _forgetVmProgram();
+        return false;
+    }
+
+    _vmProgramSize = size;
+    _vmStored      = true;
+    return true;
+}
+
+bool MiniR4WiFiRuntimeClass::_forgetVmProgram()
+{
+    // Erasing block 1 removes the magic, which is all validation looks at.
+    // Leaving blocks 2..5 alone saves four erase cycles per call on flash
+    // rated for a finite number of them.
+    const bool ok = (g_flash.erase(VM_STORE_ADDR, DATAFLASH_BLOCK) == 0);
+    if (ok) _vmStored = false;
+    return ok;
 }
 
 void MiniR4WiFiRuntimeClass::safeDelay(uint32_t ms)
@@ -463,6 +720,34 @@ void MiniR4WiFiRuntimeClass::log(const char* msg)
     char escaped[200];
     jsonEscape(msg, escaped, sizeof(escaped));
     _sendJson("{\"t\":\"log\",\"s\":\"%s\"}", escaped);
+}
+
+// --- Print mirror (R3 v2) ---------------------------------------------------
+// Buffer characters until a println terminates the line, so a sequence of
+// print() calls arrives at the console as the one line the serial monitor
+// would show. Note we buffer unconditionally: whether a client is attached
+// is decided at flush time by log(), which keeps print() cost identical
+// whether or not the IDE is watching.
+
+void MiniR4WiFiRuntimeClass::_logAppend(const String& s)
+{
+    const char* p = s.c_str();
+    for (; *p; p++) {
+        // A newline inside a print() ends the line too — student code often
+        // does Serial.print("a\n") instead of println.
+        if (*p == '\n') { _logFlush(); continue; }
+        if (*p == '\r') continue;
+        if (_logLineLen >= sizeof(_logLine) - 1) _logFlush();
+        _logLine[_logLineLen++] = *p;
+    }
+}
+
+void MiniR4WiFiRuntimeClass::_logFlush()
+{
+    if (_logLineLen == 0) return;   // bare println(): nothing worth sending
+    _logLine[_logLineLen] = '\0';
+    _logLineLen = 0;
+    log(_logLine);
 }
 
 bool MiniR4WiFiRuntimeClass::setDeviceName(const char* name)
@@ -518,6 +803,20 @@ bool MiniR4WiFiRuntimeClass::setAPPassword(const char* pass)
 bool MiniR4WiFiRuntimeClass::factoryReset()
 {
     if (g_flash.erase(CONFIG_ADDR, DATAFLASH_BLOCK) != 0) return false;
+
+    // A saved VM program is user data too, and leaving it behind makes the
+    // reset actively misleading: the hub would come back "factory fresh" and
+    // still auto-run yesterday's bytecode, which suppresses userLoop — so the
+    // robot ignores its own program and looks broken, with the one command
+    // the user reached for having apparently done nothing. Reset means reset.
+    _forgetVmProgram();
+    _vm.halt();
+    _vmProgramSize = 0;
+    _vmReceiving   = false;
+    _vmPaused      = false;
+    _vmStepOnce    = false;
+    _vmBreakCount  = 0;
+
     // Full memset, same rationale as the constructor.
     memset(_name,  0, sizeof(_name));
     memset(_ssid,  0, sizeof(_ssid));
@@ -527,6 +826,14 @@ bool MiniR4WiFiRuntimeClass::factoryReset()
     _macCache[0] = _macCache[1] = 0xFF;
     _apPassCustom = false;
     strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
+
+    // Re-derive the default identity now instead of leaving _name blank until
+    // the next boot rebuilds it in _fillIdentity(). Without this, a hub that
+    // has been reset but not yet restarted reports an empty name — which the
+    // USB setup panel showed as "?", making a successful reset look broken.
+    // _mac4 still holds the real suffix in RAM; only the persisted copy went
+    // away, and the next boot re-learns it.
+    snprintf(_name, sizeof(_name), "MBR4-%s", _mac4);
     return true;
 }
 
@@ -568,9 +875,10 @@ void MiniR4WiFiRuntimeClass::_fillIdentity()
 }
 
 // Called once the network is up (the MAC query is reliable from here on).
-// First boot on a hub: fixes the "MBR4-0000" placeholder identity, persists
-// the MAC to dataflash, and — if the fallback AP is already broadcasting the
-// wrong name — restarts it once with the right one.
+// First boot on a virgin hub or right after a factory reset: fixes the
+// "MBR4-0000" placeholder identity and persists the real MAC to dataflash.
+//
+// MAY NOT RETURN — see the reboot below.
 void MiniR4WiFiRuntimeClass::_refreshMacIdentity()
 {
     uint8_t mac[6] = {0};
@@ -579,7 +887,10 @@ void MiniR4WiFiRuntimeClass::_refreshMacIdentity()
 
     char real4[5];
     snprintf(real4, sizeof(real4), "%02X%02X", mac[4], mac[5]);
-    if (!strcmp(real4, _mac4)) return;   // identity already correct
+    if (!strcmp(real4, _mac4)) return;   // identity already correct — the
+                                         // overwhelmingly common case, and
+                                         // the reason the reboot below is
+                                         // once-in-a-hub's-life, not routine.
 
     _macCache[0] = mac[4];
     _macCache[1] = mac[5];
@@ -587,19 +898,50 @@ void MiniR4WiFiRuntimeClass::_refreshMacIdentity()
     if (!_nameCustom) {
         snprintf(_name, sizeof(_name), "MBR4-%s", _mac4);
     }
-    _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
+    const bool persisted = _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
 
-    if (_netMode == NET_AP) {
-        WIFIRT_TRACE(F("restarting AP with real MAC suffix"));
-        WiFi.end();
-        delay(500);   // same settle rationale as the failed-STA teardown
-        char apName[33];
-        apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
-        if (WiFi.beginAP(apName, _apPass) == WL_AP_LISTENING) {
-            delay(250);
-        } else {
-            _netMode = NET_DOWN;   // poll() retries; better down than misnamed
-        }
+    if (_netMode != NET_AP) return;    // station mode: SSID is the router's
+
+    // The AP is currently broadcasting the wrong name and has to change.
+    //
+    // We used to do that in place — WiFi.end(), settle, beginAP() again — and
+    // then bind the UDP/TCP sockets on the freshly restarted netif a few
+    // hundred milliseconds later. That is precisely the "bring sockets up
+    // right after a modem mode transition" window that wedged a hub in the
+    // field once before (fixed then by adding settle delays, commit a06f6a5):
+    // the symptom is brutal to diagnose because the modem still answers ping
+    // and still completes TCP handshakes while nothing reaches the sketch, so
+    // the robot looks alive to the network and dead to the IDE. A user hit it
+    // again on 2026-07-25 after a BTN_UP+BTN_DOWN factory reset — the one
+    // gesture that guarantees this path runs, because it clears the cached MAC.
+    //
+    // Widening the delays would only make the race rarer. Since the MAC is now
+    // safely in dataflash, a reset gets us the same outcome with no race at
+    // all: the next boot reads the cached MAC, brings the AP up ONCE with the
+    // correct SSID, and binds sockets on a netif that never changes under
+    // them. Costs one extra ~3 s reboot, and only on the first boot after a
+    // factory reset or on a hub that has never been powered up before.
+    //
+    // If the write failed we must NOT reset — we would come back to the same
+    // placeholder identity and reset again, forever. Fall back to the old
+    // in-place restart, which at least reaches the right SSID this session.
+    if (persisted) {
+        WIFIRT_TRACE(F("MAC learned; rebooting once for a clean AP bring-up"));
+        delay(50);            // let the trace leave the UART
+        NVIC_SystemReset();   // never returns
+    }
+
+    WIFIRT_TRACE(F("MAC persist FAILED; restarting AP in place"));
+    WiFi.end();
+    delay(500);   // same settle rationale as the failed-STA teardown
+    char apName[33];
+    apSsidFor(_name, _nameCustom, _mac4, apName, sizeof(apName));
+    if (WiFi.beginAP(apName, _apPass) == WL_AP_LISTENING) {
+        strncpy(_apSsid, apName, sizeof(_apSsid) - 1);
+        _apSsid[sizeof(_apSsid) - 1] = '\0';
+        delay(250);
+    } else {
+        _netMode = NET_DOWN;   // poll() retries; better down than misnamed
     }
 }
 
@@ -637,6 +979,8 @@ void MiniR4WiFiRuntimeClass::_startNetwork(bool recovery)
         const int apResult = WiFi.beginAP(apName, _apPass);
         if (apResult == WL_AP_LISTENING) {
             _netMode = NET_AP;
+            strncpy(_apSsid, apName, sizeof(_apSsid) - 1);
+            _apSsid[sizeof(_apSsid) - 1] = '\0';
             delay(250);   // let the AP netif settle before binding sockets
         }
     }
@@ -670,6 +1014,7 @@ void MiniR4WiFiRuntimeClass::_recoveryLoop()
             _pollDiscovery();
             _pollCommands();
         }
+        _pollSerial();   // recovery mode stays configurable over the cable
         delay(5);
     }
 }
@@ -758,7 +1103,10 @@ void MiniR4WiFiRuntimeClass::_pollCommands()
 
 void MiniR4WiFiRuntimeClass::_sendJson(const char* fmt, ...)
 {
-    if (!g_client || !g_client.connected()) return;
+    // A command that arrived over the cable is answered over the cable —
+    // otherwise USB configuration would depend on a TCP client existing,
+    // which is precisely what it is there to avoid.
+    if (!_replyToSerial && (!g_client || !g_client.connected())) return;
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
@@ -767,7 +1115,43 @@ void MiniR4WiFiRuntimeClass::_sendJson(const char* fmt, ...)
     if (len <= 0) return;
     buf[len]     = '\n';
     buf[len + 1] = '\0';
-    g_client.write((const uint8_t*)buf, len + 1);
+    if (_replyToSerial) Serial.write((const uint8_t*)buf, len + 1);
+    else                g_client.write((const uint8_t*)buf, len + 1);
+}
+
+// --- USB serial config channel ----------------------------------------------
+
+void MiniR4WiFiRuntimeClass::_pollSerial()
+{
+    // Bounded per call: a flood on the cable must not starve the network
+    // poll or the VM. 64 bytes is several commands' worth at any baud we use.
+    for (uint8_t budget = 0; budget < 64 && Serial.available() > 0; budget++) {
+        const int c = Serial.read();
+        if (c < 0) break;
+
+        if (c == '\n' || c == '\r') {
+            if (_serialLen == 0) continue;
+            _serialBuf[_serialLen] = '\0';
+            const uint16_t len = _serialLen;
+            _serialLen = 0;
+            // Only lines that look like our protocol are executed. The cable
+            // is shared with whatever the student's own sketch reads and
+            // writes, so anything that is not a JSON object is none of our
+            // business and is dropped silently rather than nacked.
+            if (_serialBuf[0] == '{' && len > 2) {
+                _replyToSerial = true;
+                _handleLine(_serialBuf);
+                _replyToSerial = false;
+            }
+            continue;
+        }
+
+        if (_serialLen < sizeof(_serialBuf) - 1) {
+            _serialBuf[_serialLen++] = (char)c;
+        } else {
+            _serialLen = 0;   // overlong line: drop it rather than truncate
+        }                     // into a command that means something else
+    }
 }
 
 void MiniR4WiFiRuntimeClass::_handleLine(char* line)
@@ -786,12 +1170,21 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         char ssidEsc[2 * MAX_SSID_LEN + 1];
         jsonEscape(_name, nameEsc, sizeof(nameEsc));
         jsonEscape(_ssid, ssidEsc, sizeof(ssidEsc));
+        // `ap` is the SSID on the air RIGHT NOW, which the IDE cannot derive:
+        // a rename only reaches the SSID on the next power-cycle, so after a
+        // rename or a factory reset the radio still carries the OLD name. That
+        // gap is the single most common reason a user "cannot find the robot
+        // anywhere" — they search for the name they just set. The panel
+        // derives the post-restart name itself from `name` + `mac`, which
+        // keeps this frame inside _sendJson's 256-byte budget.
+        char apNowEsc[2 * 33];
+        jsonEscape(_apSsid, apNowEsc, sizeof(apNowEsc));
         _sendJson("{\"t\":\"info\",\"name\":\"%s\",\"mac\":\"%s\",\"fw\":\"%s\","
                   "\"ip\":\"%u.%u.%u.%u\",\"mode\":\"%s\",\"ssid\":\"%s\","
-                  "\"batt\":%d.%02d,\"uptime\":%lu}",
+                  "\"ap\":\"%s\",\"batt\":%d.%02d,\"uptime\":%lu}",
                   nameEsc, _mac4, MINIR4_WIFI_RUNTIME_VERSION,
                   ip[0], ip[1], ip[2], ip[3],
-                  _netMode == NET_AP ? "ap" : "sta", ssidEsc,
+                  _netMode == NET_AP ? "ap" : "sta", ssidEsc, apNowEsc,
                   (int)MiniR4.PWR.getBattVoltage(),
                   (int)(MiniR4.PWR.getBattVoltage() * 100) % 100,
                   (unsigned long)millis());
@@ -863,8 +1256,12 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
 
     } else if (!strcmp(type, "reboot")) {
         _sendJson("{\"t\":\"ack\",\"cmd\":\"reboot\",\"ok\":true}");
-        g_client.flush();
-        delay(150);   // let the ack leave the modem
+        // Flush whichever transport the command came in on, or the ack dies
+        // with the reset and the caller reports a failure for a reboot that
+        // actually happened.
+        if (_replyToSerial) Serial.flush();
+        else                g_client.flush();
+        delay(150);   // let the ack leave the modem / UART
         NVIC_SystemReset();
 
     } else if (!strcmp(type, "echo")) {
@@ -892,7 +1289,11 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         }
 
     } else if (!strcmp(type, "vm_end")) {
-        _handleVmEnd();
+        // "save":true also writes the program to dataflash so it survives a
+        // power cycle and auto-runs at boot.
+        bool save = false;
+        jsonBool(line, "save", save);
+        _handleVmEnd(save);
         // Convenience: if the client passed run:true, kick execution now.
         bool autoRun = false;
         jsonBool(line, "run", autoRun);
@@ -903,6 +1304,8 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
 
     } else if (!strcmp(type, "vm_stop")) {
         _vm.halt();
+        _vmPaused   = false;
+        _vmStepOnce = false;
         _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_stop\",\"ok\":true}");
         log("VM stopped by user");
 
@@ -911,9 +1314,107 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         _vmProgramSize = 0;
         _vmRxOffset    = 0;
         _vmReceiving   = false;
+        _vmPaused      = false;
+        _vmStepOnce    = false;
         _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_erase\",\"ok\":true}");
 
+    } else if (!strcmp(type, "vm_save")) {
+        // Save whatever is currently loaded (lets the IDE offer "keep this
+        // program on the robot" after the fact, not only at upload time).
+        const bool ok = _saveVmProgram();
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_save\",\"ok\":%s,\"size\":%u}",
+                  ok ? "true" : "false", _vmProgramSize);
+
+    } else if (!strcmp(type, "vm_forget")) {
+        const bool ok = _forgetVmProgram();
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_forget\",\"ok\":%s}",
+                  ok ? "true" : "false");
+
+    } else if (!strcmp(type, "vm_info")) {
+        _sendJson("{\"t\":\"vm_info\",\"size\":%u,\"stored\":%s,\"running\":%s,"
+                  "\"paused\":%s,\"pc\":%u,\"bp\":%u}",
+                  _vmProgramSize,
+                  _vmStored        ? "true" : "false",
+                  _vm.isRunning()  ? "true" : "false",
+                  _vmPaused        ? "true" : "false",
+                  (unsigned)_vm.pc(), (unsigned)_vmBreakCount);
+
+    // --- Live block debug (R2) ---------------------------------------------
+    } else if (!strcmp(type, "vm_debug")) {
+        bool on = false;
+        jsonBool(line, "on", on);
+        long hz = 0;
+        if (jsonInt(line, "hz", hz) && hz > 0) {
+            if (hz > 20) hz = 20;   // beyond this the modem write dominates
+            _vmPcIntervalMs = (uint16_t)(1000L / hz);
+        }
+        _vmDebugOn    = on;
+        _vmPcLastSent = 0xFFFF;     // force the next frame through
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_debug\",\"ok\":true,\"ms\":%u}",
+                  _vmPcIntervalMs);
+        if (on) _sendPcFrame(true);
+
+    } else if (!strcmp(type, "vm_pause")) {
+        _vmPaused   = true;
+        _vmStepOnce = false;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_pause\",\"ok\":true}");
+        _sendPcFrame(true);
+
+    } else if (!strcmp(type, "vm_resume")) {
+        _vmPaused   = false;
+        _vmStepOnce = false;
+        _vmBpArmed  = false;   // don't re-trigger the breakpoint we sit on
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_resume\",\"ok\":true}");
+
+    } else if (!strcmp(type, "vm_step")) {
+        _vmStepOnce = true;
+        _vmBpArmed  = false;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_step\",\"ok\":true}");
+
+    } else if (!strcmp(type, "vm_break")) {
+        // {"add":pc} | {"del":pc} | {"clear":true}
+        bool clear = false;
+        long pc = 0;
+        if (jsonBool(line, "clear", clear) && clear) {
+            _vmBreakCount = 0;
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_break\",\"ok\":true,\"n\":0}");
+        } else if (jsonInt(line, "add", pc) && pc >= 0 && pc <= 0xFFFE) {
+            bool ok = true;
+            if (!_vmIsBreakpoint((uint16_t)pc)) {
+                if (_vmBreakCount < VM_MAX_BREAKPOINTS) {
+                    _vmBreak[_vmBreakCount++] = (uint16_t)pc;
+                } else {
+                    ok = false;   // full — the IDE surfaces the limit
+                }
+            }
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_break\",\"ok\":%s,\"n\":%u}",
+                      ok ? "true" : "false", (unsigned)_vmBreakCount);
+        } else if (jsonInt(line, "del", pc)) {
+            for (uint8_t i = 0; i < _vmBreakCount; i++) {
+                if (_vmBreak[i] == (uint16_t)pc) {
+                    _vmBreak[i] = _vmBreak[--_vmBreakCount];   // order is free
+                    break;
+                }
+            }
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_break\",\"ok\":true,\"n\":%u}",
+                      (unsigned)_vmBreakCount);
+        } else {
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"vm_break\",\"ok\":false,\"err\":\"args\"}");
+        }
+
+    } else if (!strcmp(type, "vm_vars")) {
+        _sendVarsFrame();
+
     } else if (!strcmp(type, "ota")) {
+        // OTA is a network operation by definition (the modem fetches the
+        // image over HTTP). Refuse it clearly over the cable rather than
+        // letting it fail deep inside OTAUpdate with a cryptic code — USB
+        // users have arduino-cli, which is the better tool anyway.
+        if (_replyToSerial || _netMode == NET_DOWN) {
+            _sendJson("{\"t\":\"ota_status\",\"phase\":\"error\",\"code\":-2,"
+                      "\"detail\":\"needs network\"}");
+            return;
+        }
         char url[160];
         if (!jsonStr(line, "url", url, sizeof(url))) {
             _sendJson("{\"t\":\"ota_status\",\"phase\":\"error\",\"code\":-1,"

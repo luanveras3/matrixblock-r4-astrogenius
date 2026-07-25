@@ -43,6 +43,22 @@ slot corrompido é detectado e recusado sem brickar (fallback: USB continua func
 
 ## R2. Modo duplo de envio: botão "Rápido (VM)" + botão "Gravar (OTA)" — com debug de bloco ao vivo
 
+**Status: ✅ CONCLUÍDO** (VM sobre TCP em 2026-07-22, commit `4401881`; debug de
+bloco ao vivo + persistência em 2026-07-25). Validado em hardware — ver
+`docs/POC_OTA_FINDINGS.md`, seção "Session 2026-07-25". Implementado na
+própria `feature/wifi-tcp-ota`, não numa branch separada.
+
+Duas diferenças em relação ao que está descrito abaixo, ambas por limite de
+hardware medido:
+- o teto da VM é **3584 bytes**, não 6 KB (o linker do UNOWIFIR4 reserva heap
+  e stack fixos; sobram 23296 B de estáticos para tudo);
+- o stream de PC vai a **10 Hz**, não 20 (cada frame custa uma escrita
+  síncrona de ~100 ms no modem).
+
+Além do descrito: o programa da VM pode ser **guardado na dataflash** e rodar
+sozinho a cada boot, sem computador — o passo que faltava para a VM servir
+também na mesa de competição, não só na iteração.
+
 **Prioridade: 2. Branch sugerida: `feature/dual-upload-vm-tcp`**
 
 Reaproveita a VM de bytecode da branch `feature/always-on-ble-runtime` trocando o transporte
@@ -71,6 +87,13 @@ execução; breakpoint em um bloco pausa o robô; modo OTA continua intacto.
 ---
 
 ## R3. Console remoto (printf sem cabo)
+
+**Status: ✅ CONCLUÍDO** (infraestrutura em 2026-07-22, commit `806ca7a`; o
+redirecionamento automático dos blocos de print em 2026-07-25). O aluno não
+precisa aprender bloco novo: o wrapper reescreve `Serial.print/println` para
+`WiFiRuntime.logPrint/logPrintln`, que espelham no USB **e** no console do
+app. Validado em hardware — a saída lida na COM10 é idêntica à do console
+remoto.
 
 **Prioridade: 3 — quase grátis, fazer junto ou logo após o manual. Pode viver na própria `feature/wifi-tcp-ota`.**
 

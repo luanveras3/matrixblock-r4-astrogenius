@@ -32,6 +32,8 @@
 !tools/bin2ota.js
 !tools/bin2ota.test.js
 !tools/wifi_wrapper.test.js
+!tools/bytecode_map.test.js
+!tools/hubctl.js
 !tools/stress_upload_wifi.js
 !tools/lzss_ref.py
 !tools/fixtures/
@@ -77,6 +79,8 @@ arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**/.build/
 !resources/app_src/blockly-core/wifi_upload.js
 !resources/app_src/blockly-core/wifi_hud.js
 !resources/app_src/blockly-core/wifi_vm_upload.js
+!resources/app_src/blockly-core/wifi_vm_debug.js
+!resources/app_src/blockly-core/usb_config.js
 !resources/app_src/assets/
 !resources/app_src/assets/img/
 !resources/app_src/assets/img/astrogenius-badge.png

@@ -220,6 +220,16 @@ public:
     Result lastError() const { return _lastResult; }
 
     /**
+     * @brief Read a variable slot — for the live debugger's variable panel.
+     * Out-of-range slots read 0 rather than trapping: this is an inspection
+     * path, and a debugger must never be able to crash the program it watches.
+     */
+    int32_t varAt(uint8_t slot) const
+    {
+        return (slot < VAR_COUNT) ? _vars[slot] : 0;
+    }
+
+    /**
      * @brief Callback invoked between 5 ms slices of DELAY_MS so the host
      * runtime can service its transport during long waits without the VM
      * recursing back into step(). BLE branch sets this to
