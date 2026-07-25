@@ -121,6 +121,35 @@ serial channel. From there, upload a different program or use USB Setup.
 This is why the recovery gesture exists and it is the one path this bug cannot
 take away.
 
+### 6.1 Confirmed working (2026-07-25)
+
+The user rescued the hub with the BTN_UP gesture and WiFi came back normally.
+That is the recovery path validated in the field, and it also confirms the
+diagnosis from the other direction: the hardware and the radio were fine all
+along — only the sketch was starving them.
+
+## 6.2 Second symptom: the same program cannot be sent to the VM either
+
+The user reports that the reproduction sketch also fails to upload as a VM
+program. Not yet investigated; the likely causes, in order of probability:
+
+1. **Unsupported blocks, not a transport failure.** The VM has no opcode for
+   printing a *string* to the OLED — `OLED_PRINT_I` prints an integer — so
+   `MiniR4.OLED.print("PRESS UP")` has nothing to compile to. Same for
+   `MiniR4.PWR.setBattCell(2)` and for logging a value to the console. The
+   compiler is expected to emit warnings and skip them, which can leave a
+   payload so small that `wifi_vm_upload.js` rejects it as `trivial`
+   (`bytes.length <= 1`).
+2. **The upload never starts** because the hub is already starved by the
+   *previous* program — the VM upload needs the TCP slot, which needs
+   `poll()`, which is exactly what is blocked. If so, the fix is BTN_UP
+   recovery first, then upload.
+
+These are different bugs with different fixes, so **reproduce and separate
+them before touching code**: rescue the hub with BTN_UP, confirm it is
+discoverable, and only then attempt the VM upload. Check the warning list the
+Send-VM window prints — it names every skipped block.
+
 ## 7. Proposed fix — in priority order
 
 **A. Pump the runtime inside user loops (the real fix).**
