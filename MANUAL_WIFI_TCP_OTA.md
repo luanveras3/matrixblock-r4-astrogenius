@@ -1,314 +1,382 @@
-# Manual de Implementação — Upload WiFi (TCP + OTA real) e Telemetria
+# Implementation Manual — WiFi Upload (TCP + real OTA) and Telemetry
 
-> **Para quem é este documento:** um agente de IA (Claude Opus ou similar) ou desenvolvedor humano
-> que vá implementar esta feature **sem acesso à conversa que a originou**. Ele é autossuficiente:
-> contém contexto do projeto, decisão de arquitetura, especificação de protocolos, fases de
-> implementação, riscos conhecidos e critérios de aceitação.
+> **Who this is for:** an AI agent (Claude Opus or similar) or a human
+> developer implementing this feature **without access to the conversation
+> that produced it**. It is self-contained: project context, architecture
+> decision, protocol specification, implementation phases, known risks and
+> acceptance criteria.
 >
-> **Branch de trabalho:** `feature/wifi-tcp-ota` (esta branch). **Não** modificar
-> `feature/always-on-ble-runtime` — ela permanece como fallback.
+> **Working branch:** `feature/wifi-tcp-ota` (this branch). Do **not** modify
+> `feature/always-on-ble-runtime` — it stays as the fallback.
+>
+> **Status note (2026-07-25):** this is the original specification. It has
+> been implemented and hardware-validated, and reality diverged from it in a
+> few places — most notably the dataflash map in §1.1 (block 6 holds the
+> `MBRW` config, blocks 1–4 hold saved VM bytecode; the authoritative map is
+> the header comment in `MiniR4WiFiRuntime.h`) and §1.3's "do not port the VM
+> here", which roadmap item R2 deliberately reversed. For what is actually
+> built, read `docs/HANDOFF_NEXT_PHASES.md` and `CHANGELOG.md`; for what to
+> do next, `docs/NEXT_SESSION.md`.
 
 ---
 
-## 1. Contexto do projeto
+## 1. Project context
 
-Este repositório é um fork comunitário (Equipe AstroGenius, Brasil) do **MATRIXblock Mini R4
-v1.0.8**, software oficial da MATRIX Robotics para o hub **MATRIX Mini R4**. Público-alvo:
-robótica educacional de competição (WRO etc.).
+This repository is a community fork (AstroGenius Team, Brazil) of
+**MATRIXblock Mini R4 v1.0.8**, MATRIX Robotics' official software for the
+**MATRIX Mini R4** hub. Target audience: competitive educational robotics
+(WRO and similar).
 
-### 1.1 Hardware do hub (fatos relevantes)
+### 1.1 Hub hardware (relevant facts)
 
-- Núcleo: **Arduino UNO R4 WiFi** — MCU principal Renesas **RA4M1** (256 KB flash, 32 KB RAM)
-  + **ESP32-S3** como modem WiFi/BLE, ligado ao RA4M1 por SPI ("usb-bridge firmware").
-- Coprocessador **STM32F103** para motores/encoders (comunicação interna, irrelevante aqui).
-- A lib `arduino/libraries/MatrixMiniR4/` expõe tudo: motores M1–M4 c/ encoder e PID, servos
-  RC1–RC4, IMU, OLED (SSD1306 @0x3D), buzzer, RGB, 2 botões, 4 portas I2C, sensores MATRIX.
-- **WiFi via `WiFiS3.h`** (já incluída no `MatrixMiniR4.h`). Suporta modo station e
-  **modo AP** (`WiFi.beginAP`) e **UDP multicast/broadcast** (`WiFiUDP`).
-- **Restrição importante:** WiFi (WiFiS3) e BLE (ArduinoBLE) compartilham o modem ESP32-S3 e
-  **não funcionam bem simultaneamente**. Esta feature usa somente WiFi; o runtime BLE não deve
-  estar ativo no mesmo sketch.
-- **Dataflash de 8 KB** (do RA4M1) com layout já definido pela branch BLE:
-  - Bloco 0: calibração IMU (reservado)
-  - Blocos 1–4: bytecode VM (usado só pela branch BLE)
-  - Bloco 5: flag BLE-enable (usado só pela branch BLE)
-  - **Blocos 6–7: livres — usar para credenciais WiFi + flags desta feature.**
+- Core: **Arduino UNO R4 WiFi** — main MCU Renesas **RA4M1** (256 KB flash,
+  32 KB RAM) plus an **ESP32-S3** as the WiFi/BLE modem, connected to the
+  RA4M1 over SPI ("usb-bridge firmware").
+- **STM32F103** coprocessor for motors/encoders (internal communication,
+  irrelevant here).
+- The `arduino/libraries/MatrixMiniR4/` library exposes everything: motors
+  M1–M4 with encoders and PID, servos RC1–RC4, IMU, OLED (SSD1306 @0x3D),
+  buzzer, RGB, two buttons, four I2C ports, MATRIX sensors.
+- **WiFi through `WiFiS3.h`** (already included by `MatrixMiniR4.h`).
+  Supports station mode, **AP mode** (`WiFi.beginAP`) and **UDP
+  multicast/broadcast** (`WiFiUDP`).
+- **Important constraint:** WiFi (WiFiS3) and BLE (ArduinoBLE) share the
+  ESP32-S3 modem and **do not work well simultaneously**. This feature uses
+  WiFi only; the BLE runtime must not be active in the same sketch.
+- **8 KB of dataflash** (on the RA4M1), with a layout already defined by the
+  BLE branch:
+  - Block 0: IMU calibration (reserved)
+  - Blocks 1–4: VM bytecode (used only by the BLE branch)
+  - Block 5: BLE-enable flag (used only by the BLE branch)
+  - **Blocks 6–7: free — use for WiFi credentials and this feature's flags.**
 
-### 1.2 Software (arquitetura do app)
+### 1.2 Software (app architecture)
 
-- App **Electron** (fork do oficial). O código-fonte patchado vive em `resources/app_src/`
-  (`app.compressed.js` ≈ 100 KB é o main+renderer bundlado; `blockly-core/` tem blocos e
-  geradores; `views/main.html` é a UI).
-- O build injeta os arquivos de `app_src/` dentro de `resources/app.asar` via
-  **`node patch_asar.js`** (abordagem de patch cirúrgico — não é um app Electron "normal" com
-  package.json próprio; respeite esse fluxo).
+- **Electron** app (fork of the official one). The patched source lives in
+  `resources/app_src/` (`app.compressed.js`, ~100 KB, is the bundled
+  main+renderer; `blockly-core/` holds blocks and generators; `views/main.html`
+  is the UI).
+- The build injects the files from `app_src/` into `resources/app.asar` via
+  **`node patch_asar.js`** (a surgical patching approach — this is not a
+  "normal" Electron app with its own package.json; respect that flow).
 - Smoke test: **`node test_app.js`** (Playwright).
-- Pipeline de programação: Blockly → gerador C++ (`blockly-core/generator/`) → sketch `.ino` →
-  **`arduino/arduino-cli.exe`** (empacotado, com core `arduino:renesas_uno`) compila → upload
-  USB serial.
-- A branch `feature/always-on-ble-runtime` adicionou uma **VM de bytecode** (77 opcodes,
-  `MiniR4VM.cpp`, `MiniR4BLERuntime.cpp`, gerador em `ide_patch/blockly-core/bytecode.js` e
-  `generator_bytecode/`) com upload por Web Bluetooth a ~40 B/s. Limitações documentadas em
+- Programming pipeline: Blockly → C++ generator (`blockly-core/generator/`) →
+  `.ino` sketch → **`arduino/arduino-cli.exe`** (bundled, with the
+  `arduino:renesas_uno` core) compiles → USB serial upload.
+- The `feature/always-on-ble-runtime` branch added a **bytecode VM** (77
+  opcodes, `MiniR4VM.cpp`, `MiniR4BLERuntime.cpp`, generator in
+  `ide_patch/blockly-core/bytecode.js` and `generator_bytecode/`) with
+  uploads over Web Bluetooth at ~40 B/s. Limitations are documented in
   `arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/SESSION_2026-07-18_ALWAYS_ON_BLE.md`:
-  teto empírico de **6 KB de bytecode** (~600–1000 blocos), handlers incompletos (strings,
-  ultrassônico, DriveDC), starvation do stack BLE quando o código do usuário bloqueia,
-  ausência de device picker, throughput baixíssimo.
+  an empirical ceiling of **6 KB of bytecode** (~600–1000 blocks), incomplete
+  handlers (strings, ultrasonic, DriveDC), BLE stack starvation when user code
+  blocks, no device picker, and very low throughput.
 
-### 1.3 Decisão de arquitetura (já tomada — não rediscutir)
+### 1.3 Architecture decision (already made — do not reopen)
 
-**Substituir o transporte BLE por WiFi TCP e substituir a VM por upload de firmware real (OTA).**
+**Replace the BLE transport with WiFi TCP, and replace the VM with a real
+firmware upload (OTA).**
 
-| Critério | VM + BLE (atual) | OTA + WiFi TCP (esta feature) |
+| Criterion | VM + BLE (current) | OTA + WiFi TCP (this feature) |
 |---|---|---|
-| Velocidade de upload | ~40 B/s (100 s p/ 4 KB) | dezenas–centenas de KB/s |
-| Limite de programa | 6 KB bytecode (~600–1000 blocos) | flash de 256 KB do RA4M1 (~milhares de blocos; na prática ilimitado) |
-| Cobertura de blocos | ~36 handlers, faltam strings/US/DriveDC | **100%** — roda o C++ real gerado |
-| Robustez de conexão | starvation → queda de conexão | TCP tolera bloqueios (buffer) |
-| Lado do app | Web Bluetooth (flaky no Electron) | sockets nativos Node (`net`, `dgram`, `http`) |
-| Multi-robô | nomes duplicados, sem picker | IP único + discovery UDP + picker |
-| Custo | iteração instantânea (14 B/bloco) | recompilação arduino-cli (~15–30 s por envio) |
+| Upload speed | ~40 B/s (100 s for 4 KB) | tens–hundreds of KB/s |
+| Program limit | 6 KB of bytecode (~600–1000 blocks) | the RA4M1's 256 KB of flash (thousands of blocks; effectively unlimited) |
+| Block coverage | ~36 handlers, missing strings/US/DriveDC | **100%** — it runs the real generated C++ |
+| Connection robustness | starvation → dropped connection | TCP tolerates blocking (buffering) |
+| App side | Web Bluetooth (flaky under Electron) | native Node sockets (`net`, `dgram`, `http`) |
+| Multi-robot | duplicate names, no picker | unique IP + UDP discovery + picker |
+| Cost | instant iteration (14 B/block) | arduino-cli recompile (~15–30 s per upload) |
 
-O único ponto em que a VM ganha (iteração instantânea) não compensa as limitações. A VM
-permanece disponível na branch dela como modo alternativo futuro; **não portar a VM para cá**.
+The one place where the VM wins — instant iteration — does not outweigh its
+limitations. The VM stays available on its own branch as a possible future
+alternative mode; **do not port the VM here.**
+*(Reversed later: roadmap R2 ported the VM over TCP precisely to get that
+instant iteration back, alongside OTA rather than instead of it.)*
 
-**Mecanismo de OTA escolhido:** biblioteca oficial **`OTAUpdate`** do core
-`arduino:renesas_uno` (ArduinoCore-renesas, `libraries/OTAUpdate`). API:
+**Chosen OTA mechanism:** the official **`OTAUpdate`** library from the
+`arduino:renesas_uno` core (ArduinoCore-renesas, `libraries/OTAUpdate`). API:
 
 ```cpp
 #include <OTAUpdate.h>
 OTAUpdate ota;
-ota.begin("/update.bin");              // path no filesystem do ESP32-S3
-ota.download(url, "/update.bin");      // o MODEM (ESP32-S3) baixa via HTTP(S)
-ota.verify();                          // valida header + CRC do .ota
-ota.update("/update.bin");             // reflasha o RA4M1 e reinicia
+ota.begin("/update.bin");              // path on the ESP32-S3 filesystem
+ota.download(url, "/update.bin");      // the MODEM (ESP32-S3) downloads over HTTP(S)
+ota.verify();                          // validates the .ota header + CRC
+ota.update("/update.bin");             // reflashes the RA4M1 and reboots
 ```
 
-Pontos-chave: o arquivo `.ota` fica no flash do **ESP32-S3** (não consome flash do RA4M1 —
-sem limite de "metade da flash" da alternativa JAndrassy/ArduinoOTA); o formato `.ota` é o da
-Arduino Cloud (header + payload **LZSS**); o app Electron servirá o arquivo via **HTTP na LAN**.
+Key points: the `.ota` file lives in the **ESP32-S3's** flash (it does not
+consume RA4M1 flash — so there is no "half the flash" limit like the
+JAndrassy/ArduinoOTA alternative); the `.ota` format is Arduino Cloud's
+(header + **LZSS** payload); the Electron app serves the file over **HTTP on
+the LAN**.
 
 ---
 
-## 2. Arquitetura alvo
+## 2. Target architecture
 
 ```
-┌────────────────────── App Electron ──────────────────────┐
-│ Blockly → C++ (gerador existente, SEM bytecode)          │
+┌────────────────────── Electron app ──────────────────────┐
+│ Blockly → C++ (existing generator, NO bytecode)          │
 │ arduino-cli compile → sketch.bin                         │
-│ bin2ota (novo, Node) → sketch.ota                        │
-│ HTTP server efêmero (porta 47800) servindo sketch.ota    │
-│ UDP discovery client (broadcast porta 47801)             │
-│ TCP command client (porta 47802 do robô)                 │
-│ UI: botão "Enviar via WiFi", picker de robôs, progresso  │
+│ bin2ota (new, Node) → sketch.ota                         │
+│ ephemeral HTTP server (port 47800) serving sketch.ota    │
+│ UDP discovery client (broadcast, port 47801)             │
+│ TCP command client (robot's port 47802)                  │
+│ UI: "Send via WiFi" button, robot picker, progress       │
 └──────────────────────────────────────────────────────────┘
-                    │ WiFi (AP do robô OU rede local)
+                    │ WiFi (robot's AP OR the local network)
 ┌────────────────────── Firmware (wrapper) ────────────────┐
-│ MiniR4WiFiRuntime (novo módulo da lib MatrixMiniR4):     │
-│  - conecta WiFi (credenciais na dataflash) ou cria AP    │
-│  - responde discovery UDP (nome, IP, versão, bateria)    │
-│  - servidor TCP 47802: comandos NDJSON                   │
-│  - telemetria: push NDJSON no mesmo socket               │
-│  - comando OTA → OTAUpdate.download/verify/update        │
-│  - poll não-bloqueante chamado do loop() (wrapper)       │
+│ MiniR4WiFiRuntime (new module in the MatrixMiniR4 lib):  │
+│  - joins WiFi (credentials in dataflash) or opens an AP  │
+│  - answers UDP discovery (name, IP, version, battery)    │
+│  - TCP server on 47802: NDJSON commands                  │
+│  - telemetry: NDJSON push on the same socket             │
+│  - OTA command → OTAUpdate.download/verify/update        │
+│  - non-blocking poll called from loop() (wrapper)        │
 └──────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 Protocolo de discovery (UDP, porta 47801)
+### 2.1 Discovery protocol (UDP, port 47801)
 
-- App envia broadcast (`255.255.255.255:47801` e, em modo AP, `192.168.4.255`):
-  `{"t":"MBR4_DISCOVER","v":1}`
-- Cada robô responde unicast para o remetente:
-  `{"t":"MBR4_HERE","v":1,"name":"<nome>","mac":"<suffix4>","ip":"x.x.x.x","fw":"<versão wrapper>","batt":<volts>,"mode":"ap"|"sta"}`
-- `name` default: `MBR4-<4 últimos hex do MAC>` — resolve o problema de nomes duplicados
-  documentado na branch BLE. Nome customizável persistido na dataflash.
+- The app broadcasts (`255.255.255.255:47801`, and `192.168.4.255` in AP
+  mode): `{"t":"MBR4_DISCOVER","v":1}`
+- Each robot answers unicast to the sender:
+  `{"t":"MBR4_HERE","v":1,"name":"<name>","mac":"<suffix4>","ip":"x.x.x.x","fw":"<wrapper version>","batt":<volts>,"mode":"ap"|"sta"}`
+- Default `name`: `MBR4-<last 4 hex digits of the MAC>` — this fixes the
+  duplicate-name problem documented on the BLE branch. A custom name is
+  persisted in dataflash.
 
-### 2.2 Protocolo de comando (TCP, porta 47802, NDJSON — 1 JSON por linha)
+### 2.2 Command protocol (TCP, port 47802, NDJSON — one JSON object per line)
 
-Requests do app → robô:
+App → robot requests:
 
-| Comando | Payload | Resposta |
+| Command | Payload | Response |
 |---|---|---|
 | `{"t":"ping"}` | — | `{"t":"pong","fw":"...","uptime":ms}` |
-| `{"t":"info"}` | — | nome, versões, bateria, portas I2C detectadas |
-| `{"t":"telemetry","on":true,"hz":10}` | liga/desliga stream | frames `{"t":"tm",...}` contínuos |
-| `{"t":"ota","url":"http://<ip-app>:47800/sketch.ota","size":N,"crc":"..."}` | inicia OTA | `{"t":"ota_status","phase":"download"|"verify"|"apply","pct":N}` e por fim reboot |
-| `{"t":"setname","name":"..."}` | grava na dataflash | ack |
-| `{"t":"setwifi","ssid":"...","pass":"..."}` | grava credenciais (dataflash blocos 6–7) | ack |
+| `{"t":"info"}` | — | name, versions, battery, detected I2C ports |
+| `{"t":"telemetry","on":true,"hz":10}` | starts/stops the stream | continuous `{"t":"tm",...}` frames |
+| `{"t":"ota","url":"http://<app-ip>:47800/sketch.ota","size":N,"crc":"..."}` | starts an OTA | `{"t":"ota_status","phase":"download"|"verify"|"apply","pct":N}`, then a reboot |
+| `{"t":"setname","name":"..."}` | writes to dataflash | ack |
+| `{"t":"setwifi","ssid":"...","pass":"..."}` | writes credentials (dataflash blocks 6–7) | ack |
 
-Frames de telemetria (robô → app, mesmo socket): reutilizar **exatamente o formato/campos que a
-telemetria BLE do fork já envia** (ver implementação em
-`arduino/libraries/MatrixMiniR4/src/Modules/MiniR4BLERuntime.cpp` e o consumidor no
-`app_src/app.compressed.js`) para que o dashboard existente funcione sem mudanças, apenas com a
-fonte trocada.
+Telemetry frames (robot → app, same socket): reuse **exactly the format and
+fields the fork's BLE telemetry already sends** (see the implementation in
+`arduino/libraries/MatrixMiniR4/src/Modules/MiniR4BLERuntime.cpp` and the
+consumer in `app_src/app.compressed.js`), so the existing dashboard works
+unchanged with only the source swapped.
 
-### 2.3 Fluxo de upload completo
+### 2.3 Full upload flow
 
-1. Usuário clica **"Enviar via WiFi"**.
-2. App compila com arduino-cli (fluxo existente do upload USB — reusar; flag
-   `--export-binaries` já produz `.bin`).
-3. App converte `.bin` → `.ota` (módulo `bin2ota.js`, ver Fase 1).
-4. App sobe HTTP server efêmero na porta 47800 servindo o `.ota`.
-5. App envia `{"t":"ota","url":...}` via TCP ao robô selecionado.
-6. Robô responde progresso; o modem baixa o arquivo; `verify()`; `update()` → reboot.
-7. Novo sketch (que embute o wrapper de novo) volta a anunciar-se via UDP; app reconecta e
-   confirma nova versão (`fw` muda) → sucesso na UI.
-8. App derruba o HTTP server.
+1. The user clicks **"Send via WiFi"**.
+2. The app compiles with arduino-cli (reuse the existing USB upload flow; the
+   `--export-binaries` flag already produces a `.bin`).
+3. The app converts `.bin` → `.ota` (the `bin2ota.js` module, see Phase 1).
+4. The app starts an ephemeral HTTP server on port 47800 serving the `.ota`.
+5. The app sends `{"t":"ota","url":...}` over TCP to the selected robot.
+6. The robot reports progress; the modem downloads the file; `verify()`;
+   `update()` → reboot.
+7. The new sketch (which embeds the wrapper again) starts announcing itself
+   over UDP; the app reconnects and confirms the new version (`fw` changes) →
+   success in the UI.
+8. The app shuts the HTTP server down.
 
-### 2.4 Wrapper de sketch (gerador)
+### 2.4 Sketch wrapper (generator)
 
-Igual em espírito ao `arduino_ble_wrapper.js` da branch BLE (referência de como envolver
-`userSetup`/`userLoop`), mas **sem VM**: o código do usuário roda nativo.
+Same in spirit as the BLE branch's `arduino_ble_wrapper.js` (the reference for
+how to wrap `userSetup`/`userLoop`), but **without a VM**: user code runs
+natively.
 
 ```cpp
 #include <MatrixMiniR4.h>
 #include "MiniR4WiFiRuntime.h"
 
-void userSetup() { /* setup() gerado dos blocos */ }
-void userLoop()  { /* loop() gerado dos blocos */ }
+void userSetup() { /* setup() generated from the blocks */ }
+void userLoop()  { /* loop() generated from the blocks */ }
 
 void setup() {
     MiniR4.begin();
-    WiFiRuntime.begin();   // WiFi + discovery + TCP server; não bloqueia se não conectar
+    WiFiRuntime.begin();   // WiFi + discovery + TCP server; does not block if it cannot connect
     userSetup();
 }
 void loop() {
-    WiFiRuntime.poll();    // não-bloqueante
+    WiFiRuntime.poll();    // non-blocking
     userLoop();
 }
 ```
 
-Mitigações do problema de starvation (documentado na branch BLE — vale para qualquer transporte):
+Mitigations for the starvation problem (documented on the BLE branch — it
+applies to any transport):
 
-- Gerador substitui `delay(x)` dos blocos por `WiFiRuntime.safeDelay(x)` (fatia em passos de
-  ~20 ms chamando `poll()` entre eles). O generator C++ existente centraliza a emissão de
-  `delay` — modificar lá.
-- **Modo de recuperação (obrigatório):** segurar **BTN_UP no boot** ⇒ `begin()` entra em loop
-  só de rede (não chama `userLoop`), OLED mostra "OTA MODE" + IP. Garante que um sketch de
-  usuário travado nunca tire o robô do ar — o pior caso vira: reiniciar segurando o botão.
-- Fallback final continua sendo o upload USB normal (inalterado).
-
----
-
-## 3. Fases de implementação
-
-Implementar **nesta ordem**; cada fase tem entregável testável. Commits em inglês, estilo do
-repo (`feat(...)`, `fix(...)`, `docs(...)` — ver `git log`). Após alterar `app_src`, rodar
-`node patch_asar.js` e `node test_app.js`.
-
-### Fase 0 — Prova de conceito manual (sem tocar no app) ⚠️ FAZER PRIMEIRO
-
-Valida as 3 incógnitas desta feature antes de escrever código de produto:
-
-1. Atualizar o firmware do usb-bridge (ESP32-S3) do hub para a versão mais recente
-   (Arduino IDE → Firmware Updater, ou `arduino-fwuploader`). OTA depende de firmware de modem
-   recente.
-2. Sketch de teste baseado no exemplo oficial
-   `ArduinoCore-renesas/libraries/OTAUpdate/examples/OTA/OTA.ino`, adaptado para baixar de um
-   **servidor HTTP local** (ex.: `python -m http.server` servindo um `.ota`).
-3. Gerar o `.ota` de um blink com a ferramenta de referência da Arduino (script
-   `bin2ota.py` + `lzss.py` no repo `arduino/ArduinoIoTCloud`, pasta `extras/tools/`, ou
-   `arduino-cloud-cli ota encode`). Anotar bytes do header gerado (servirá de fixture p/ Fase 1).
-4. **Responder e registrar em `docs/POC_OTA_FINDINGS.md`:**
-   - `ota.download()` aceita `http://` puro (sem TLS)? (Se **não**: plano B = servir via HTTPS
-     com certificado fixo do app embutido via `setCACert`, gerado uma vez e commitado; o robô
-     só confia nele.)
-   - Tamanho do sketch mínimo `MatrixMiniR4 + WiFiS3 + OTAUpdate` (couber com folga em 256 KB;
-     a branch BLE mediu 126.904 B com VM — sem VM deve cair).
-   - Tempo total download+verify+update para um sketch de ~150 KB.
-   - OTA funciona em **modo AP**? (o download é feito pelo modem; testar com o app na rede do
-     AP do robô servindo o arquivo). Se não funcionar em AP, documentar e exigir modo station
-     (hotspot do celular/roteador da sala) para OTA, mantendo AP para telemetria.
-
-### Fase 1 — `bin2ota` em Node
-
-- Novo arquivo `tools/bin2ota.js` (CommonJS, sem dependências externas): porta fiel de
-  `bin2ota.py` + `lzss.py` da Arduino (formato: header com length/CRC32/magic number do board —
-  para UNO R4 WiFi o magic deriva de VID/PID `0x2341`/`0x1002` — seguido do binário comprimido
-  **LZSS**; confirmar campos exatos lendo os scripts de referência na Fase 0).
-- Teste: `tools/bin2ota.test.js` compara byte a byte a saída com o fixture `.ota` gerado pela
-  ferramenta oficial na Fase 0. **Não prosseguir sem igualdade binária.**
-
-### Fase 2 — Firmware: `MiniR4WiFiRuntime`
-
-- Novos arquivos: `arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.{h,cpp}`.
-- Implementa: credenciais/nome na dataflash (blocos 6–7), STA com fallback AP
-  (`MBR4-<mac4>` / senha padrão documentada), discovery UDP (§2.1), servidor TCP NDJSON
-  (§2.2), `safeDelay()`, modo de recuperação BTN_UP, handler de OTA chamando `OTAUpdate`.
-- Parser JSON: mínimo/manual (mensagens são pequenas e planas — não adicionar ArduinoJson, para
-  poupar flash/RAM; RAM já era 63% na branch BLE).
-- Exemplo compilável: `examples/7-WiFi Runtime/MiniR4_WiFi_Runtime.ino`.
-- Telemetria: extrair a serialização dos frames de `MiniR4BLERuntime.cpp` para um helper
-  compartilhado (ou duplicar com comentário, se extrair exigir mexer na branch BLE — preferir
-  duplicar aqui a tocar no código BLE).
-
-### Fase 3 — App Electron: transporte + UI
-
-- Novo `resources/app_src/blockly-core/wifi_upload.js` (espelho do `ble_upload.js` da branch
-  BLE, que serve só de referência de integração): discovery UDP (`dgram`), cliente TCP (`net`),
-  servidor HTTP efêmero (`http` — servir o `.ota` de um path aleatório, aceitar só o IP do robô
-  alvo, derrubar ao fim), orquestração do fluxo §2.3 com timeout e retry (1 retry automático).
-- **Processo:** `dgram`/`net`/`http` rodam no **main process**; UI conversa via IPC (seguir o
-  padrão de IPC que o `app.compressed.js` já usa para o serialport).
-- Wrapper do gerador: `arduino_wifi_wrapper.js` (§2.4) aplicado quando o alvo é WiFi.
-- UI em `views/main.html` + `app.compressed.js`:
-  - Botão **"Enviar via WiFi"** ao lado do upload USB e do BLE.
-  - **Picker de robôs**: modal listando respostas do discovery (nome, IP, bateria, fw) com
-    refresh e cancelamento — corrige na origem as pendências P2 da branch BLE.
-  - Barra de progresso com fases (compilando / convertendo / enviando / gravando / reiniciando).
-  - Diálogo de configuração: nome do robô e credenciais WiFi (`setname`/`setwifi`).
-- Strings novas em pt-BR **e** en (o fork tem locale pt-BR em `blockly-core/msg/scratch_msgs.js`).
-
-### Fase 4 — Telemetria via TCP
-
-- Ligar o dashboard de telemetria existente à fonte TCP: comando `telemetry on` ao conectar,
-  mesmo parsing de frames de hoje. Seleção de fonte (BLE/WiFi) onde o app hoje escolhe o BLE.
-- Meta: ≥10 Hz estável com todos os sensores, sem perda visível em 10 min (a folga de banda é
-  grande; o limitante é o poll no firmware).
-
-### Fase 5 — Testes e ferramentas
-
-- `tools/stress_upload_wifi.py` (adaptar `tools/stress_upload.py` da branch BLE): N uploads OTA
-  consecutivos medindo tempo e taxa de sucesso. Meta: **20/20 uploads** de um sketch ≥100 KB.
-- Teste e2e Playwright (padrão de `test_app.js`): abrir app → botão WiFi visível → picker abre
-  → estados de erro (nenhum robô encontrado) renderizam.
-- Atualizar `README.md` (seção da feature), `CHANGELOG.md`, e criar
-  `docs/WIFI_UPLOAD.md` (guia do usuário final: como configurar a rede da sala, modo AP,
-  recuperação com BTN_UP, solução de problemas).
+- The generator replaces the blocks' `delay(x)` with
+  `WiFiRuntime.safeDelay(x)` (which slices the wait into ~20 ms steps and
+  calls `poll()` between them). The existing C++ generator centralises where
+  `delay` is emitted — change it there.
+  *(Known gap, 2026-07-25: this covers waits but not loops. See
+  `docs/BUG_BLOCKING_USERLOOP.md`.)*
+- **Recovery mode (mandatory):** holding **BTN_UP at boot** makes `begin()`
+  enter a network-only loop (it never calls `userLoop`), with "OTA MODE" and
+  the IP on the OLED. This guarantees a stuck user sketch can never take the
+  robot off the air — the worst case becomes "reboot holding the button".
+- The final fallback remains the normal USB upload (unchanged).
 
 ---
 
-## 4. Riscos conhecidos e decisões de contorno
+## 3. Implementation phases
 
-1. **HTTP puro no `ota.download()`** — risco nº 1; por isso a Fase 0 existe. Plano B descrito lá.
-2. **OTA em modo AP** — incógnita nº 2; verificar na Fase 0. Pior caso: OTA exige station
-   (hotspot de celular resolve em sala/pit) e AP fica só para telemetria/discovery.
-3. **Flash/RAM** — sem a VM sobra mais espaço que na branch BLE, mas medir na Fase 0 e imprimir
-   o uso no log de compilação da UI (o fork já tem "footer size bar"; reusar).
-4. **Firewall do Windows** — primeiro `dgram`/`http` do Electron dispara prompt do firewall;
-   documentar no guia do usuário e detectar timeout de discovery com mensagem explicativa.
-5. **Robô some após sketch do usuário travar** — coberto pelo modo de recuperação BTN_UP
-   (Fase 2; é requisito, não opcional).
-6. **Regras de competição** proíbem wireless durante rodadas — feature é de pit/treino/sala;
-   deixar claro no `docs/WIFI_UPLOAD.md` e oferecer bloco/toggle "desligar rádio".
-7. **Não usar** `WiFiS3` + `ArduinoBLE` no mesmo sketch (modem compartilhado).
-8. **MQTT fica fora desta branch** — telemetria multi-robô via broker (modo professor) é feature
-   futura separada; o protocolo TCP daqui não deve impedi-la (por isso NDJSON tipado com `"t"`).
+Implement **in this order**; every phase has a testable deliverable. Commits
+in English, in the repo's style (`feat(...)`, `fix(...)`, `docs(...)` — see
+`git log`). After changing `app_src`, run `node patch_asar.js` and
+`node test_app.js`.
 
-## 5. Critérios de aceitação da branch
+### Phase 0 — Manual proof of concept (without touching the app) ⚠️ DO THIS FIRST
 
-- [ ] Upload OTA de um programa Blockly de **>2000 blocos** (impossível na VM) funciona ponta a ponta.
-- [ ] Tempo total "clicar → robô rodando" ≤ 60 s (dominado pela compilação, não pela rede).
-- [ ] 20/20 uploads consecutivos sem falha (stress test).
-- [ ] Dois robôs ligados simultaneamente: picker distingue e envia para o certo.
-- [ ] Robô com sketch travado é recuperado via BTN_UP + novo OTA (sem USB).
-- [ ] Telemetria ≥10 Hz por 10 min sem queda.
-- [ ] Upload USB original continua intacto.
-- [ ] `node patch_asar.js` e `node test_app.js` passam; docs atualizados.
+Validates this feature's three unknowns before any product code is written:
 
-## 6. Referências
+1. Update the hub's usb-bridge (ESP32-S3) firmware to the latest version
+   (Arduino IDE → Firmware Updater, or `arduino-fwuploader`). OTA depends on
+   a recent modem firmware.
+2. A test sketch based on the official example
+   `ArduinoCore-renesas/libraries/OTAUpdate/examples/OTA/OTA.ino`, adapted to
+   download from a **local HTTP server** (e.g. `python -m http.server`
+   serving a `.ota`).
+3. Generate the `.ota` for a blink sketch with Arduino's reference tooling
+   (`bin2ota.py` + `lzss.py` in the `arduino/ArduinoIoTCloud` repo, folder
+   `extras/tools/`, or `arduino-cloud-cli ota encode`). Record the bytes of
+   the generated header (it becomes the fixture for Phase 1).
+4. **Answer and record in `docs/POC_OTA_FINDINGS.md`:**
+   - Does `ota.download()` accept plain `http://` (no TLS)? (If **not**:
+     plan B is serving over HTTPS with a fixed certificate embedded in the
+     app via `setCACert`, generated once and committed; the robot trusts only
+     that one.)
+   - The minimum sketch size for `MatrixMiniR4 + WiFiS3 + OTAUpdate` (it must
+     fit comfortably in 256 KB; the BLE branch measured 126,904 B with the VM
+     — without the VM it should drop).
+   - Total download+verify+update time for a ~150 KB sketch.
+   - Does OTA work in **AP mode**? (the download is done by the modem; test
+     with the app on the robot's AP network serving the file). If it does not
+     work in AP, document it and require station mode (a phone hotspot or the
+     classroom router) for OTA, keeping AP for telemetry.
 
-- Exemplo oficial OTA: `github.com/arduino/ArduinoCore-renesas` → `libraries/OTAUpdate/examples/OTA/OTA.ino`
-- Ferramenta de referência `.ota`: `github.com/arduino/ArduinoIoTCloud` → `extras/tools/bin2ota.py` e `lzss.py` (ou `arduino-cloud-cli ota encode`)
-- Análise das limitações BLE/VM: `arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/SESSION_2026-07-18_ALWAYS_ON_BLE.md` (branch `feature/always-on-ble-runtime`)
-- Wrapper BLE de referência: `.../6-VM Runtime/ide_patch/blockly-core/arduino_ble_wrapper.js` (mesma branch)
-- Alternativa descartada (limite de metade da flash): `github.com/JAndrassy/ArduinoOTA`
+### Phase 1 — `bin2ota` in Node
+
+- New file `tools/bin2ota.js` (CommonJS, no external dependencies): a faithful
+  port of Arduino's `bin2ota.py` + `lzss.py` (format: a header with
+  length/CRC32/board magic number — for the UNO R4 WiFi the magic derives from
+  VID/PID `0x2341`/`0x1002` — followed by the **LZSS**-compressed binary;
+  confirm the exact fields by reading the reference scripts in Phase 0).
+- Test: `tools/bin2ota.test.js` compares the output byte for byte against the
+  `.ota` fixture produced by the official tool in Phase 0. **Do not proceed
+  without binary equality.**
+
+### Phase 2 — Firmware: `MiniR4WiFiRuntime`
+
+- New files:
+  `arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.{h,cpp}`.
+- Implements: credentials/name in dataflash (blocks 6–7), STA with AP
+  fallback (`MBR4-<mac4>` / a documented default password), UDP discovery
+  (§2.1), NDJSON TCP server (§2.2), `safeDelay()`, BTN_UP recovery mode, and
+  the OTA handler calling `OTAUpdate`.
+- JSON parser: minimal/hand-written (messages are small and flat — do not add
+  ArduinoJson, to save flash/RAM; RAM was already at 63% on the BLE branch).
+- Compilable example: `examples/7-WiFi Runtime/MiniR4_WiFi_Runtime.ino`.
+- Telemetry: extract the frame serialisation from `MiniR4BLERuntime.cpp` into
+  a shared helper (or duplicate it with a comment, if extracting would mean
+  touching the BLE branch — prefer duplicating here over touching BLE code).
+
+### Phase 3 — Electron app: transport + UI
+
+- New `resources/app_src/blockly-core/wifi_upload.js` (mirroring the BLE
+  branch's `ble_upload.js`, which serves only as an integration reference):
+  UDP discovery (`dgram`), TCP client (`net`), ephemeral HTTP server (`http` —
+  serve the `.ota` from a random path, accept only the target robot's IP,
+  shut down at the end), and the §2.3 flow with timeouts and retry (one
+  automatic retry).
+- **Process:** `dgram`/`net`/`http` run in the **main process**; the UI talks
+  over IPC (follow the IPC pattern `app.compressed.js` already uses for
+  serialport).
+- Generator wrapper: `arduino_wifi_wrapper.js` (§2.4), applied when the
+  target is WiFi.
+- UI in `views/main.html` + `app.compressed.js`:
+  - A **"Send via WiFi"** button next to the USB and BLE uploads.
+  - A **robot picker**: a modal listing discovery responses (name, IP,
+    battery, fw) with refresh and cancel — fixing the BLE branch's P2
+    backlog at the root.
+  - A progress bar with phases (compiling / converting / uploading /
+    flashing / rebooting).
+  - A settings dialog: robot name and WiFi credentials (`setname`/`setwifi`).
+- New strings in pt-BR **and** en (the fork has a pt-BR locale in
+  `blockly-core/msg/scratch_msgs.js`).
+
+### Phase 4 — Telemetry over TCP
+
+- Point the existing telemetry dashboard at the TCP source: send
+  `telemetry on` on connect, same frame parsing as today. Add a source
+  selector (BLE/WiFi) where the app currently picks BLE.
+- Goal: a stable ≥10 Hz with every sensor, with no visible loss over 10
+  minutes (there is plenty of bandwidth headroom; the limit is the firmware
+  poll).
+
+### Phase 5 — Tests and tooling
+
+- `tools/stress_upload_wifi.py` (adapted from the BLE branch's
+  `tools/stress_upload.py`): N consecutive OTA uploads, measuring time and
+  success rate. Goal: **20/20 uploads** of a sketch ≥100 KB.
+- Playwright e2e test (following the `test_app.js` pattern): open the app →
+  the WiFi button is visible → the picker opens → error states (no robot
+  found) render.
+- Update `README.md` (feature section) and `CHANGELOG.md`, and create
+  `docs/WIFI_UPLOAD.md` (end-user guide: how to set up the classroom network,
+  AP mode, BTN_UP recovery, troubleshooting).
+
+---
+
+## 4. Known risks and workarounds
+
+1. **Plain HTTP in `ota.download()`** — risk number one; this is why Phase 0
+   exists. Plan B is described there.
+2. **OTA in AP mode** — unknown number two; verify in Phase 0. Worst case:
+   OTA requires station mode (a phone hotspot solves it in the classroom or
+   the pit) and AP is left for telemetry/discovery.
+3. **Flash/RAM** — without the VM there is more room than on the BLE branch,
+   but measure in Phase 0 and print the usage in the UI's build log (the fork
+   already has a "footer size bar"; reuse it).
+4. **Windows Firewall** — the first `dgram`/`http` call from Electron
+   triggers the firewall prompt; document it in the user guide and detect a
+   discovery timeout with an explanatory message.
+5. **The robot disappears after a user sketch hangs** — covered by BTN_UP
+   recovery mode (Phase 2; it is a requirement, not an option).
+6. **Competition rules** forbid wireless during scoring runs — this feature
+   is for the pit, practice and the classroom; make that clear in
+   `docs/WIFI_UPLOAD.md` and offer a "radio off" block or toggle.
+7. **Do not use** `WiFiS3` and `ArduinoBLE` in the same sketch (shared modem).
+8. **MQTT stays out of this branch** — multi-robot telemetry through a broker
+   ("teacher mode") is a separate future feature; the TCP protocol here must
+   not preclude it (hence typed NDJSON with `"t"`).
+
+## 5. Branch acceptance criteria
+
+- [ ] An OTA upload of a Blockly program with **more than 2000 blocks**
+      (impossible on the VM) works end to end.
+- [ ] Total "click → robot running" time ≤ 60 s (dominated by compilation,
+      not by the network).
+- [ ] 20/20 consecutive uploads without failure (stress test).
+- [ ] Two robots powered on simultaneously: the picker tells them apart and
+      uploads to the right one.
+- [ ] A robot with a hung sketch is recovered via BTN_UP + a new OTA (no USB).
+- [ ] Telemetry at ≥10 Hz for 10 minutes without dropping.
+- [ ] The original USB upload still works untouched.
+- [ ] `node patch_asar.js` and `node test_app.js` pass; docs updated.
+
+## 6. References
+
+- Official OTA example: `github.com/arduino/ArduinoCore-renesas` →
+  `libraries/OTAUpdate/examples/OTA/OTA.ino`
+- Reference `.ota` tooling: `github.com/arduino/ArduinoIoTCloud` →
+  `extras/tools/bin2ota.py` and `lzss.py` (or `arduino-cloud-cli ota encode`)
+- Analysis of the BLE/VM limitations:
+  `arduino/libraries/MatrixMiniR4/examples/6-VM Runtime/SESSION_2026-07-18_ALWAYS_ON_BLE.md`
+  (branch `feature/always-on-ble-runtime`)
+- Reference BLE wrapper:
+  `.../6-VM Runtime/ide_patch/blockly-core/arduino_ble_wrapper.js` (same branch)
+- Rejected alternative (half-the-flash limit): `github.com/JAndrassy/ArduinoOTA`

@@ -1,242 +1,280 @@
-# Roadmap — Features pós-TCP/OTA
+# Roadmap — Features after TCP/OTA
 
-> Este roadmap lista as features planejadas **depois** da conclusão da base descrita em
-> [MANUAL_WIFI_TCP_OTA.md](MANUAL_WIFI_TCP_OTA.md) (branch `feature/wifi-tcp-ota`).
-> Todas dependem da infraestrutura daquela branch (discovery UDP, protocolo TCP NDJSON,
-> pipeline `bin2ota`, wrapper `MiniR4WiFiRuntime`) — **não iniciar nenhuma antes de o manual
-> atingir seus critérios de aceitação.**
+> This roadmap lists the features planned **after** the base described in
+> [MANUAL_WIFI_TCP_OTA.md](MANUAL_WIFI_TCP_OTA.md) (branch `feature/wifi-tcp-ota`)
+> is complete. All of them depend on that branch's infrastructure (UDP
+> discovery, the NDJSON TCP protocol, the `bin2ota` pipeline, the
+> `MiniR4WiFiRuntime` wrapper) — **do not start any of them before the manual
+> meets its acceptance criteria.**
 >
-> Como o manual, este documento é autossuficiente para um agente de IA (Claude Opus ou
-> similar) trabalhar sem acesso às conversas que o originaram. A ordem abaixo é a ordem de
-> prioridade decidida pelo mantenedor. Cada feature deve virar uma branch própria a partir de
-> `feature/wifi-tcp-ota` (ou de `master` após o merge).
+> Like the manual, this document is self-contained enough for an AI agent
+> (Claude Opus or similar) to work from without access to the conversation
+> that produced it. The order below is the maintainer's priority order. Each
+> feature should get its own branch off `feature/wifi-tcp-ota` (or off
+> `master` once merged).
 
 ---
 
-## R1. Multi-missão sem PC (slots de programa no ESP32-S3)
+## R1. Multi-mission without a PC (program slots on the ESP32-S3)
 
-**Prioridade: 1 (feature-assinatura do fork). Branch sugerida: `feature/mission-slots`**
+**Priority: 1 (the fork's signature feature). Suggested branch: `feature/mission-slots`**
 
-O arquivo `.ota` é armazenado no filesystem do **ESP32-S3 (8 MB)** antes de o RA4M1 ser
-regravado. Logo, o hub pode guardar **vários programas completos** e alternar entre eles sem
-computador:
+The `.ota` file is stored on the **ESP32-S3's** filesystem (8 MB) before the
+RA4M1 is reflashed. So the hub can hold **several complete programs** and
+switch between them with no computer:
 
-- App ganha o conceito de "slots": enviar programa para o slot N (`/mission1.ota` …
-  `/missionN.ota` no fs do modem) com nome amigável.
-- No hub, um gesto (ex.: segurar BTN_DOWN no boot) abre um **menu no OLED** navegável com
-  UP/DOWN listando os slots; confirmar chama `OTAUpdate.update("/missionN.ota")` → o hub se
-  regrava sozinho em ~10–20 s e reinicia na missão escolhida.
-- Metadados dos slots (nomes, tamanhos, data) guardados num arquivo índice no fs do modem,
-  lidos/escritos via comandos TCP novos (`slots_list`, `slot_write`, `slot_delete`).
+- The app gains the concept of "slots": send a program to slot N
+  (`/mission1.ota` … `/missionN.ota` on the modem's filesystem) with a
+  friendly name.
+- On the hub, a gesture (e.g. holding BTN_DOWN at boot) opens an **OLED menu**
+  navigable with UP/DOWN listing the slots; confirming calls
+  `OTAUpdate.update("/missionN.ota")` → the hub reflashes itself in ~10–20 s
+  and restarts in the chosen mission.
+- Slot metadata (names, sizes, dates) is kept in an index file on the modem's
+  filesystem, read and written through new TCP commands (`slots_list`,
+  `slot_write`, `slot_delete`).
 
-**Caso de uso alvo:** WRO — equipe leva o robô para a mesa com todas as missões gravadas,
-troca de programa **nativo completo** (não bytecode) entre rodadas, sem notebook.
+**Target use case:** WRO — the team brings the robot to the table with every
+mission already stored and switches between **full native programs** (not
+bytecode) between rounds, without a laptop.
 
-**Validar primeiro (POC):** `ota.update(file_path)` aceita qualquer path do fs do modem;
-quantos arquivos cabem; tempo real de regravação; comportamento com arquivo corrompido
-(`verify()` por slot antes de aplicar).
+**Validate first (PoC):** does `ota.update(file_path)` accept any path on the
+modem's filesystem; how many files fit; the real reflash time; behaviour with
+a corrupted file (`verify()` per slot before applying).
 
-**Aceite:** 3 missões gravadas → alternar entre as 3 pelo OLED sem PC, 10x seguidas, sem falha;
-slot corrompido é detectado e recusado sem brickar (fallback: USB continua funcionando).
-
----
-
-## R2. Modo duplo de envio: botão "Rápido (VM)" + botão "Gravar (OTA)" — com debug de bloco ao vivo
-
-**Status: ✅ CONCLUÍDO** (VM sobre TCP em 2026-07-22, commit `4401881`; debug de
-bloco ao vivo + persistência em 2026-07-25). Validado em hardware — ver
-`docs/POC_OTA_FINDINGS.md`, seção "Session 2026-07-25". Implementado na
-própria `feature/wifi-tcp-ota`, não numa branch separada.
-
-Duas diferenças em relação ao que está descrito abaixo, ambas por limite de
-hardware medido:
-- o teto da VM é **3584 bytes**, não 6 KB (o linker do UNOWIFIR4 reserva heap
-  e stack fixos; sobram 23296 B de estáticos para tudo);
-- o stream de PC vai a **10 Hz**, não 20 (cada frame custa uma escrita
-  síncrona de ~100 ms no modem).
-
-Além do descrito: o programa da VM pode ser **guardado na dataflash** e rodar
-sozinho a cada boot, sem computador — o passo que faltava para a VM servir
-também na mesa de competição, não só na iteração.
-
-**Prioridade: 2. Branch sugerida: `feature/dual-upload-vm-tcp`**
-
-Reaproveita a VM de bytecode da branch `feature/always-on-ble-runtime` trocando o transporte
-Web Bluetooth (~40 B/s) por TCP (o bytecode de ≤6 KB sobe em milissegundos):
-
-- **"Enviar (rápido)"**: compila blocos → bytecode (pipeline existente em
-  `ide_patch/blockly-core/bytecode.js` + `generator_bytecode/`) → envia via TCP → VM executa.
-  Iteração instantânea, sem arduino-cli. Sujeito às limitações conhecidas da VM (teto de 6 KB,
-  handlers incompletos — ver `SESSION_2026-07-18_ALWAYS_ON_BLE.md` na branch BLE).
-- **"Gravar (completo)"**: fluxo OTA do manual. Sem limites, para o programa de competição.
-- Auto-sugestão: se o workspace usa blocos sem handler na VM ou excede o teto, o app
-  desabilita o modo rápido com tooltip explicando o porquê.
-- O firmware precisa carregar VM **e** runtime WiFi juntos (medir flash/RAM; a VM+BLE usava
-  126.904 B / 63% RAM — sem o stack BLE deve haver folga, confirmar).
-
-**Debug de bloco ao vivo (o diferencial):** a VM conhece o program counter. Adicionar:
-
-- Mapa opcode→blockId emitido pelo gerador de bytecode junto com o programa.
-- VM reporta PC via TCP (frame `{"t":"pc","addr":N}`, throttled ~20 Hz).
-- IDE acende o bloco em execução no Blockly (highlight estilo Scratch), com pausa/step e
-  leitura de variáveis (`{"t":"vars"}` → dump da tabela de variáveis da VM).
-
-**Aceite:** editar um bloco e ver o efeito no robô em <2 s; highlight ao vivo acompanhando a
-execução; breakpoint em um bloco pausa o robô; modo OTA continua intacto.
+**Acceptance:** 3 missions stored → switch between all 3 from the OLED with no
+PC, 10 times in a row, without failure; a corrupted slot is detected and
+refused without bricking (fallback: USB keeps working).
 
 ---
 
-## R3. Console remoto (printf sem cabo)
+## R2. Dual send mode: "Fast (VM)" button + "Flash (OTA)" button — with live block debug
 
-**Status: ✅ CONCLUÍDO** (infraestrutura em 2026-07-22, commit `806ca7a`; o
-redirecionamento automático dos blocos de print em 2026-07-25). O aluno não
-precisa aprender bloco novo: o wrapper reescreve `Serial.print/println` para
-`WiFiRuntime.logPrint/logPrintln`, que espelham no USB **e** no console do
-app. Validado em hardware — a saída lida na COM10 é idêntica à do console
-remoto.
+**Status: ✅ DONE** (VM over TCP on 2026-07-22, commit `4401881`; live block
+debug and persistence on 2026-07-25). Hardware-validated — see the
+"Session 2026-07-25" section of `docs/POC_OTA_FINDINGS.md`. Implemented on
+`feature/wifi-tcp-ota` itself rather than a separate branch.
 
-**Prioridade: 3 — quase grátis, fazer junto ou logo após o manual. Pode viver na própria `feature/wifi-tcp-ota`.**
+Two differences from what is described below, both driven by measured
+hardware limits:
 
-- Gerador redireciona os blocos de `Serial.print/println` para
-  `WiFiRuntime.log(...)` que espelha no Serial USB **e** publica frame TCP
-  `{"t":"log","s":"..."}` (buffer circular, descarte silencioso se desconectado).
-- O console existente do app (que hoje lê a serial USB) ganha a fonte TCP — mesmo painel,
-  mesma UI de gráfico/texto, só muda a origem dos dados.
+- the VM ceiling is **3584 bytes**, not 6 KB (the UNOWIFIR4 linker reserves a
+  fixed heap and stack, leaving 23296 B of statics for everything);
+- the PC stream runs at **10 Hz**, not 20 (every frame costs a synchronous
+  ~100 ms modem write).
 
-**Aceite:** programa com prints rodando sem cabo mostra os logs no console do app em tempo
-real; desconectar o app não trava nem atrasa o robô.
+Beyond what is described: the VM program can be **stored in dataflash** and
+run on its own at every boot with no computer — the missing piece that lets
+the VM serve on the competition table too, not just during iteration.
 
----
+Reuses the bytecode VM from the `feature/always-on-ble-runtime` branch,
+swapping the Web Bluetooth transport (~40 B/s) for TCP (a ≤6 KB bytecode
+uploads in milliseconds):
 
-## R4. Espelho do OLED no app
+- **"Send (fast)"**: compile blocks → bytecode (existing pipeline in
+  `ide_patch/blockly-core/bytecode.js` + `generator_bytecode/`) → send over
+  TCP → the VM runs it. Instant iteration, no arduino-cli. Subject to the
+  VM's known limits (6 KB ceiling, incomplete handlers — see
+  `SESSION_2026-07-18_ALWAYS_ON_BLE.md` on the BLE branch).
+- **"Flash (full)"**: the manual's OTA flow. No limits, for the competition
+  program.
+- Auto-suggestion: if the workspace uses blocks with no VM handler, or exceeds
+  the ceiling, the app disables fast mode with a tooltip explaining why.
+- The firmware has to carry the VM **and** the WiFi runtime together (measure
+  flash/RAM; VM+BLE used 126,904 B and 63% RAM — without the BLE stack there
+  should be room, confirm).
 
-**Prioridade: 4 — barato, alto valor didático. Branch sugerida: `feature/oled-mirror` (ou junto do R3).**
+**Live block debug (the differentiator):** the VM knows the program counter.
+Add:
 
-- O framebuffer do SSD1306 (128×64 mono = 1 KB) vive na RAM do RA4M1
-  (classe `MiniR4OLED`/Adafruit_SSD1306 — o buffer é acessível).
-- Comando TCP `{"t":"oled","on":true,"hz":5}` → runtime envia o buffer (1 KB, opcionalmente
-  RLE) a ~5 Hz → app renderiza num canvas escalado ("o que o robô está pensando"), útil para o
-  professor projetar a tela do robô no telão.
+- an opcode→blockId map emitted by the bytecode generator alongside the
+  program;
+- the VM reporting its PC over TCP (frame `{"t":"pc","addr":N}`, throttled to
+  ~20 Hz);
+- the IDE lighting up the running block in Blockly (Scratch-style highlight),
+  with pause/step and variable inspection (`{"t":"vars"}` → dump of the VM's
+  variable table).
 
-**Aceite:** animação no OLED físico aparece no app com atraso imperceptível (<300 ms) sem
-degradar a telemetria.
-
----
-
-## R5. Tuning ao vivo (PID, thresholds, constantes)
-
-**Prioridade: 5. Branch sugerida: `feature/live-tuning`**
-
-- Novo bloco "parâmetro ajustável" (nome + valor inicial + min/max): o gerador registra cada
-  parâmetro numa tabela no firmware (nome → ponteiro/valor).
-- Comandos TCP: `{"t":"params"}` (lista) e `{"t":"set","k":"kp","v":1.8}` (escreve).
-- Painel no app com sliders gerados automaticamente a partir da lista; alterações aplicam sem
-  regravar. Persistência opcional do último valor na dataflash para sobreviver ao reboot.
-- Caso de uso âncora: tunar PID do DriveDC vendo o gráfico da telemetria (setpoint × encoder)
-  ao lado dos sliders.
-
-**Aceite:** ajustar Kp com o robô rodando e ver a resposta no gráfico sem recompilar; valores
-persistem após reboot quando o usuário salvar.
-
----
-
-## R6. Controle remoto virtual + teach-in
-
-**Prioridade: 6. Branch sugerida: `feature/remote-drive`**
-
-- **Dirigir pelo app:** joystick/WASD na UI → frames TCP `{"t":"drive","l":N,"r":N}` (~20 Hz)
-  → runtime aciona os motores quando em "modo remoto" (entrado por comando, saído por timeout
-  de 500 ms sem frames — failsafe obrigatório: parar motores).
-- **Teach-in:** o app grava a sequência de comandos com timestamps e converte em blocos de
-  movimento (`runFor`/`turn`) inseridos no workspace — pilotou, virou programa autônomo
-  editável.
-
-**Aceite:** dirigir o robô pelo app com latência aceitável (<150 ms percebida); perda de
-conexão para os motores em ≤500 ms; gravação de 30 s vira programa que reproduz o trajeto
-aproximado.
+**Acceptance:** edit a block and see the effect on the robot in under 2 s; the
+live highlight follows execution; a breakpoint on a block pauses the robot;
+OTA mode still works.
 
 ---
 
-## R7. Deploy em turma + telemetria multi-robô ("modo professor")
+## R3. Remote console (printf without a cable)
 
-**Prioridade: 7. Branch sugerida: `feature/classroom`**
+**Status: ✅ DONE** (infrastructure on 2026-07-22, commit `806ca7a`; the
+automatic redirect of the print blocks on 2026-07-25). Students do not have to
+learn a new block: the wrapper rewrites `Serial.print/println` into
+`WiFiRuntime.logPrint/logPrintln`, which mirror to USB **and** to the app's
+console. Hardware-validated — the output read on COM10 is identical to the
+remote console's.
 
-- O discovery UDP já enxerga todos os robôs da rede. UI nova: lista de robôs com checkbox →
-  **enviar o mesmo programa para N robôs** (fila de OTAs sequenciais com progresso por robô).
-- Painel professor: telemetria resumida de todos (bateria, estado, último log) em grade.
-- Evolução natural (fase 2 desta feature): broker MQTT embutido no app (ex.: Aedes, npm puro)
-  e o runtime publicando telemetria via PubSubClient — só migrar para MQTT se o fan-in TCP
-  simples (N sockets) mostrar limite prático; começar pelo simples.
+**Priority: 3 — nearly free, do it alongside or right after the manual. Can live on `feature/wifi-tcp-ota` itself.**
 
-**Aceite:** 5 robôs recebem o mesmo programa em sequência sem intervenção; painel mostra os 5
-ao vivo; falha em um robô não interrompe a fila.
+- The generator redirects the `Serial.print/println` blocks to
+  `WiFiRuntime.log(...)`, which mirrors to USB Serial **and** publishes the
+  TCP frame `{"t":"log","s":"..."}` (ring buffer, silently dropped when
+  disconnected).
+- The app's existing console (which today reads USB serial) gains the TCP
+  source — same panel, same text/chart UI, only the data origin changes.
 
----
-
-## R8. Dashboard no celular (página web servida pelo app)
-
-**Prioridade: 8. Branch sugerida: `feature/phone-dashboard`**
-
-- O app já roda um servidor HTTP para o OTA; expandi-lo (porta separada, ex.: 47803) para
-  servir uma SPA mínima (HTML único, sem build) com: telemetria ao vivo (WebSocket → ponte
-  para o TCP do robô), botão START/STOP, cronômetro de rodada.
-- Aluno abre `http://<ip-do-notebook>:47803` no celular — nada para instalar.
-- Atenção: page é só leitura + start/stop; nenhum comando destrutivo/upload pela página.
-
-**Aceite:** celular na mesma rede vê telemetria ao vivo e dispara START; dois celulares
-simultâneos funcionam.
+**Acceptance:** a program with prints running without a cable shows its logs
+in the app's console in real time; disconnecting the app neither hangs nor
+slows the robot.
 
 ---
 
-## R9. Visualizador OpenMV integrado
+## R4. OLED mirror in the app
 
-**Prioridade: 9 — módulo independente, pode andar em paralelo a qualquer outra. Branch sugerida: `feature/openmv-viewer`**
+**Priority: 4 — cheap, high teaching value. Suggested branch: `feature/oled-mirror` (or together with R3).**
 
-Não embutir o OpenMV IDE (Qt, GPL, manutenção pesada). Em vez disso, falar o **protocolo de
-debug USB aberto** da OpenMV, cuja implementação de referência é `pyopenmv.py` (repositório
-`openmv/openmv`, pasta `tools/`): conexão serial, envio de script MicroPython, streaming do
-framebuffer.
+- The SSD1306 framebuffer (128×64 mono = 1 KB) lives in the RA4M1's RAM (the
+  `MiniR4OLED`/Adafruit_SSD1306 class — the buffer is accessible).
+- TCP command `{"t":"oled","on":true,"hz":5}` → the runtime sends the buffer
+  (1 KB, optionally RLE) at ~5 Hz → the app renders it on a scaled canvas
+  ("what the robot is thinking"), useful for a teacher projecting the robot's
+  screen.
 
-- Portar o essencial de `pyopenmv.py` para JS sobre o `@serialport` **já empacotado** no app.
-- Nova aba "Câmera": stream do framebuffer ao vivo (canvas) + editor do script MicroPython
-  usando o **Monaco já integrado** (modo C++ do fork) + botões rodar/parar/salvar na câmera.
-- Escopo mínimo deliberado: ver imagem + editar/rodar script. Sem depurador MicroPython, sem
-  gerenciador de pacotes — para isso existe o OpenMV IDE oficial.
-- Vídeo **através do hub** está fora de escopo (UART do hub limita a ~1 fps inútil); a câmera
-  conecta direto no USB do PC. No robô, a OpenMV conversa com o hub por UART apenas com
-  mensagens de detecção (via `SmartCamReader`/protocolo próprio), como hoje.
-
-**Aceite:** plugar OpenMV no USB → aba Câmera mostra vídeo ao vivo; editar script e rodar sem
-abrir o OpenMV IDE; desconectar a câmera não afeta o resto do app.
+**Acceptance:** an animation on the physical OLED shows up in the app with
+imperceptible lag (<300 ms) without degrading telemetry.
 
 ---
 
-## R10. Gerenciador de firmware do hub
+## R5. Live tuning (PID, thresholds, constants)
 
-**Prioridade: 10 (qualidade de vida). Branch sugerida: `feature/firmware-manager`**
+**Priority: 5. Suggested branch: `feature/live-tuning`**
 
-Painel "Firmware do Hub" com a versão de cada camada e botão de atualização:
+- A new "adjustable parameter" block (name + initial value + min/max): the
+  generator registers each parameter in a firmware table (name → pointer or
+  value).
+- TCP commands: `{"t":"params"}` (list) and `{"t":"set","k":"kp","v":1.8}`
+  (write).
+- A panel in the app with sliders generated automatically from the list;
+  changes apply without reflashing. Optional persistence of the last value in
+  dataflash so it survives a reboot.
+- Anchor use case: tuning the DriveDC PID while watching the telemetry chart
+  (setpoint × encoder) next to the sliders.
 
-| Camada | Versão via | Atualização |
+**Acceptance:** adjust Kp with the robot running and see the response in the
+chart without recompiling; values persist after a reboot when the user saves.
+
+---
+
+## R6. Virtual remote control + teach-in
+
+**Priority: 6. Suggested branch: `feature/remote-drive`**
+
+- **Drive from the app:** joystick/WASD in the UI → TCP frames
+  `{"t":"drive","l":N,"r":N}` (~20 Hz) → the runtime drives the motors while
+  in "remote mode" (entered by command, left by a 500 ms timeout with no
+  frames — a mandatory failsafe: stop the motors).
+- **Teach-in:** the app records the command sequence with timestamps and turns
+  it into movement blocks (`runFor`/`turn`) inserted into the workspace — you
+  drove it, and it became an editable autonomous program.
+
+**Acceptance:** drive the robot from the app with acceptable latency (<150 ms
+perceived); losing the connection stops the motors within 500 ms; a 30 s
+recording becomes a program that roughly reproduces the path.
+
+---
+
+## R7. Classroom deployment + multi-robot telemetry ("teacher mode")
+
+**Priority: 7. Suggested branch: `feature/classroom`**
+
+- UDP discovery already sees every robot on the network. New UI: a list of
+  robots with checkboxes → **send the same program to N robots** (a queue of
+  sequential OTAs with per-robot progress).
+- Teacher panel: summarised telemetry for all of them (battery, state, last
+  log) in a grid.
+- Natural evolution (phase 2 of this feature): an MQTT broker embedded in the
+  app (e.g. Aedes, pure npm) with the runtime publishing telemetry via
+  PubSubClient — only migrate to MQTT if plain TCP fan-in (N sockets) shows a
+  practical limit; start simple.
+
+**Acceptance:** 5 robots receive the same program in sequence with no
+intervention; the panel shows all 5 live; a failure on one robot does not
+interrupt the queue.
+
+---
+
+## R8. Phone dashboard (web page served by the app)
+
+**Priority: 8. Suggested branch: `feature/phone-dashboard`**
+
+- The app already runs an HTTP server for OTA; expand it (separate port, e.g.
+  47803) to serve a minimal SPA (a single HTML file, no build) with: live
+  telemetry (WebSocket → bridge to the robot's TCP), a START/STOP button, and
+  a round timer.
+- The student opens `http://<laptop-ip>:47803` on their phone — nothing to
+  install.
+- Note: the page is read-only plus start/stop; no destructive commands and no
+  uploads through it.
+
+**Acceptance:** a phone on the same network sees live telemetry and can
+trigger START; two phones work simultaneously.
+
+---
+
+## R9. Integrated OpenMV viewer
+
+**Priority: 9 — an independent module, can run in parallel with any other. Suggested branch: `feature/openmv-viewer`**
+
+Do not embed the OpenMV IDE (Qt, GPL, heavy maintenance). Instead, speak
+OpenMV's **open USB debug protocol**, whose reference implementation is
+`pyopenmv.py` (repo `openmv/openmv`, folder `tools/`): serial connection,
+sending a MicroPython script, and framebuffer streaming.
+
+- Port the essentials of `pyopenmv.py` to JS on top of the `@serialport`
+  **already bundled** in the app.
+- A new "Camera" tab: live framebuffer stream (canvas) + a MicroPython script
+  editor using the **already integrated Monaco** (the fork's C++ mode) +
+  run/stop/save-to-camera buttons.
+- Deliberately minimal scope: see the image, edit and run a script. No
+  MicroPython debugger, no package manager — the official OpenMV IDE exists
+  for that.
+- Video **through the hub** is out of scope (the hub's UART limits it to a
+  useless ~1 fps); the camera connects straight to the PC's USB. On the robot,
+  the OpenMV talks to the hub over UART with detection messages only (via
+  `SmartCamReader`/its own protocol), as it does today.
+
+**Acceptance:** plug an OpenMV into USB → the Camera tab shows live video;
+edit and run a script without opening the OpenMV IDE; unplugging the camera
+does not affect the rest of the app.
+
+---
+
+## R10. Hub firmware manager
+
+**Priority: 10 (quality of life). Suggested branch: `feature/firmware-manager`**
+
+A "Hub Firmware" panel with each layer's version and an update button:
+
+| Layer | Version via | Update |
 |---|---|---|
-| Sketch/runtime do usuário | comando TCP `info` (campo `fw`) | OTA (já existe) |
-| Biblioteca MatrixMiniR4 empacotada | `library.properties` local | junto do app |
-| ESP32-S3 usb-bridge | `WiFi.firmwareVersion()` reportado no `info` | USB, orquestrando `arduino-fwuploader` (empacotar no app, como o arduino-cli) |
-| STM32F103 (MMLower) | protocolo interno MMLower (investigar em `Modules/MMLower.cpp`) | USB/DFU — embrulhar o fluxo existente da pasta `dfu/` (STM32_Programmer_CLI) numa UI com changelog |
+| User sketch/runtime | TCP command `info` (field `fw`) | OTA (already exists) |
+| Bundled MatrixMiniR4 library | local `library.properties` | ships with the app |
+| ESP32-S3 usb-bridge | `WiFi.firmwareVersion()` reported in `info` | USB, orchestrating `arduino-fwuploader` (bundle it in the app, like arduino-cli) |
+| STM32F103 (MMLower) | internal MMLower protocol (investigate in `Modules/MMLower.cpp`) | USB/DFU — wrap the existing `dfu/` folder flow (STM32_Programmer_CLI) in a UI with a changelog |
 
-- Investigação registrada à parte: atualização *wireless* do STM32 via RA4M1 (bootloader UART
-  do F103) — **não prometida**; documentar viabilidade em `docs/STM32_OTA_FINDINGS.md` antes
-  de qualquer implementação.
+- Investigation recorded separately: *wireless* STM32 updates via the RA4M1
+  (the F103's UART bootloader) — **not promised**; document feasibility in
+  `docs/STM32_OTA_FINDINGS.md` before implementing anything.
 
-**Aceite:** painel mostra as 4 versões corretas; atualizar o usb-bridge e o MMLower pelo app
-sem ferramentas externas; qualquer falha deixa instruções de recuperação na tela.
+**Acceptance:** the panel shows the 4 correct versions; update the usb-bridge
+and the MMLower from the app without external tools; any failure leaves
+recovery instructions on screen.
 
 ---
 
-## Fora do roadmap (decisões registradas)
+## Out of scope (recorded decisions)
 
-- **Overlay de detecções da HuskyLens na telemetria** — considerado e descartado por ora: o
-  mantenedor não possui a câmera para testar. Reavaliar se o hardware ficar disponível; o
-  design está descrito na conversa de origem (retângulos/IDs via telemetria TCP, sem vídeo).
-- **Portar a VM para dentro da branch TCP/OTA base** — não; a VM entra apenas via R2.
-- **MQTT como transporte primário** — não; entra no máximo como evolução interna do R7.
+- **HuskyLens detection overlay on telemetry** — considered and dropped for
+  now: the maintainer does not have the camera to test with. Reconsider if the
+  hardware becomes available; the design is described in the originating
+  conversation (rectangles/IDs over TCP telemetry, no video).
+- **Porting the VM into the base TCP/OTA branch** — no; the VM only arrives
+  via R2. *(R2 is now done, so it did.)*
+- **MQTT as the primary transport** — no; at most it arrives as an internal
+  evolution of R7.

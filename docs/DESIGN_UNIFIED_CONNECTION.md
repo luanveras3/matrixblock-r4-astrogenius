@@ -1,8 +1,8 @@
 # Design — one connection manager for USB and WiFi
 
 **Status:** proposed, not implemented. Requested 2026-07-25.
-**Motivation, in the user's words:** *"dessa forma sempre saberemos quando
-está conectado no WIFI e quando não está."*
+**Motivation, in the maintainer's words:** *"that way we will always know when
+it is connected to WiFi and when it is not."*
 
 ---
 
