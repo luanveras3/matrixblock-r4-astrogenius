@@ -124,6 +124,21 @@
         f.textContent = 'AstroGenius ' + window.MBR4Version.short() + ' · ' +
                         window.MBR4Version.baseLine();
         f.title = window.MBR4Version.tooltip();
+
+        // The way out of the beta, right under the line that says it is one.
+        if (window.MBR4Channel && window.MBR4Channel.available) {
+            const a = document.createElement('a');
+            a.className = 'astro-nav-channel';
+            a.href = '#';
+            a.textContent = window.MBR4Channel.label();
+            a.style.cssText = 'display:block;margin-top:4px;color:#4a90d9;text-decoration:none;';
+            a.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                panelEl.style.display = 'none';
+                window.MBR4Channel.switchToStable();
+            });
+            f.appendChild(a);
+        }
         // Always last, however many buttons arrive after it.
         panelEl.appendChild(f);
     }

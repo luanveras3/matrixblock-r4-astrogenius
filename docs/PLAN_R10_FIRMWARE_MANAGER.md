@@ -176,3 +176,71 @@ purely the plumbing:
 Worth doing: for a classroom, "put it back the way it was" in one click — with
 the fork one click away again — is the difference between trying a beta and not
 risking it. Not release-blocking.
+
+### Channel switch — SHIPPED
+
+`blockly-core/channel.js`. "Switch to the official version" in the AstroGenius
+dropdown, under the line that says this is a beta.
+
+Sequence: park the current build → spawn a detached PowerShell helper → ask the
+app to close → helper waits for the process to exit → copy → relaunch.
+
+Four things learned building it, each of which broke a working assumption:
+
+1. **Plain `fs` cannot touch `app.asar`.** Electron intercepts any path
+   containing `.asar` and serves it as a directory, so `copyFileSync` on it
+   returns ENOENT. `original-fs` is the unpatched module for exactly this.
+2. **A `.bak` name proves nothing.** The bench install had six archives; four
+   were old fork builds, and the first version of the pristine check passed all
+   of them. Detection now reads the archive: fork-only modules in
+   `blockly-core`, and — decisive, because the earliest fork versions added no
+   file there — the AstroGenius brand in `views/main.html`. With that, exactly
+   one of the six classifies as pristine.
+3. **Do not guess where the Desktop is.** It is localised and usually
+   redirected into OneDrive. A guessed path put the return shortcut in a legacy
+   junction the user would never have opened. PowerShell resolves it with
+   `[Environment]::GetFolderPath("Desktop")`, so the helper places the shortcut
+   rather than the renderer.
+4. **A tidy extra copy cost 108 MB.** An early draft parked pristine under a
+   fixed name as well. The `.bak` it copied from is exactly as likely to
+   survive as the copy, so the source is now used where it sits.
+
+Safety properties, both deliberate: if the user cancels the close prompt the
+helper times out and changes nothing, and nothing is ever deleted — the build
+being left is copied aside first, so the trip is always round.
+
+Verified end to end on the bench: hashes confirmed the active archive became
+pristine, the app relaunched on the official build, the shortcut appeared on
+the real Desktop, and running it restored the fork.
+
+**The return trip cannot live in the app** — once the official build is
+running there is no AstroGenius UI left to offer it. Hence the Desktop
+shortcut. That is a real constraint, not a shortcut in the design.
+
+---
+
+## 8. Project file compatibility, both directions
+
+Asked, and worth recording because the answer is not the obvious one.
+
+**`.mbr4` files are compatible in both directions.** They are plain Blockly XML
+— block types, field values, coordinates. Compatibility therefore depends
+entirely on whether the fork changed the block vocabulary, and it did not:
+
+- **143 block types in pristine, 143 in the fork.** None added, none removed.
+  Everything this fork does — WiFi upload, the VM, live debug, the remote
+  console — is IDE machinery and firmware, reached through buttons and the
+  existing blocks, never through new ones.
+- The 68 changed lines in `blocks/_mini.js` swap hardcoded English dropdown
+  labels for `AG(...)` lookups. **Every serialized value is untouched** —
+  `"true"`, `"L"`, `"R"`, `"readHumidity"` and the rest are identical on both
+  sides. Only what the student *reads* changes.
+
+So a project saved in the beta opens in the official app, and vice versa. A
+`.mbr4` that used a fork-only block would be the thing that breaks this, and
+there is no such block to use.
+
+The one asymmetry is not in the file: a hub last programmed by the fork keeps
+the AstroGenius runtime until the official app uploads to it. That is the
+firmware layer, covered in `UPSTREAM_CHANGES.md`, and it resolves itself with
+the first upload from whichever app is running.
