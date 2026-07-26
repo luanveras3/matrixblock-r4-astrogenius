@@ -93,6 +93,18 @@ Suggested order is in §4 of the design doc. Ship the manager alongside the
 existing pickers first, change nothing else, then convert consumers one by
 one.
 
+## 3b. Radio off — validated 2026-07-25
+
+`{"t":"radio","on":false}` / `on:true`, with a button in the connection panel.
+Full round trip exercised over the cable: off → ack, `radio:false`, IP 0.0.0.0,
+UDP discovery finds nothing, **and the cable still answers**; on → ack, AP back
+at 192.168.4.1. Not persisted, so a power cycle always restores the radio — a
+hub that boots unreachable is the failure this branch exists to prevent.
+
+Telemetry is also gated on the dashboard being visible (measured 0 / 45 / 0
+frames per 5 s: hidden, open, left). Between the two, the radio now works only
+when someone is actually using it.
+
 ## 4. Still open from before
 
 - Release (§6 of `HANDOFF_NEXT_PHASES.md`): tag, GitHub Actions build,
