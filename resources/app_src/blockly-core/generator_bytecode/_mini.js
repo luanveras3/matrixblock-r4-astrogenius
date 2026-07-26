@@ -318,7 +318,6 @@ goog.require('Blockly.BytecodeVM');
     // I2C laser distance. begin() is a no-op here: the runtime already
     // constructs the driver, and emitting nothing keeps a "begin" block from
     // being reported as unsupported.
-    G['mini_i2c_MXLaserV2_begin'] = function () { return ''; };
     G['mini_i2c_MXLaserV2_getDistance'] = function () {
         const port = i2cPort(this.getFieldValue('PIN'), 'mini_i2c_MXLaserV2_getDistance');
         return [G.pushInt(port) + G.byte(G.OPS.I2C_LASER), G.ORDER_ATOMIC];
@@ -326,7 +325,6 @@ goog.require('Blockly.BytecodeVM');
 
     // I2C colour sensor. COLOR selects the component; anything we do not
     // recognise falls back to the colour ID, which is what most programs use.
-    G['mini_i2c_MXcolorV3_begin'] = function () { return ''; };
     G['mini_i2c_MXcolorV3_getColor'] = function () {
         const port = i2cPort(this.getFieldValue('PIN'), 'mini_i2c_MXcolorV3_getColor');
         const map  = { R: 0, G: 1, B: 2, RED: 0, GREEN: 1, BLUE: 2 };
@@ -359,11 +357,28 @@ goog.require('Blockly.BytecodeVM');
                 G.byte(G.OPS.I2C_READ), G.ORDER_ATOMIC];
     }
 
-    // begin() blocks: the driver is already constructed by the runtime, so
-    // there is nothing to emit — and emitting nothing keeps them from being
-    // reported to the student as unsupported when they are just unnecessary.
-    ['mini_i2c_MXlaser_begin', 'mini_i2c_MXcolor_begin',
-     'mini_i2c_MXGesture_begin', 'mini_i2c_HTcolor_begin',
+    // begin() blocks emit a REAL bring-up. An earlier cut made them no-ops on
+    // the reasoning that the runtime already constructs the driver — hardware
+    // disproved it immediately: every sensor read returned its not-present
+    // sentinel until begin() actually ran. Constructing the C++ object is not
+    // the same as initialising the device (model-ID check, register writes,
+    // continuous mode). The runtime does probe them, but only inside the
+    // telemetry path, which is now gated on the dashboard being visible — so
+    // a VM program cannot assume it has happened.
+    function i2cBegin(block, sensor) {
+        const port = i2cPort(block.getFieldValue('PIN'), block.type);
+        // Result is pushed by the opcode; discard it, the student's block has
+        // no output socket.
+        return G.pushInt(port) + G.pushInt(sensor) +
+               G.byte(G.OPS.I2C_BEGIN) + G.byte(G.OPS.POP);
+    }
+    G['mini_i2c_MXLaserV2_begin'] = function () { return i2cBegin(this, 0); };
+    G['mini_i2c_MXcolorV3_begin'] = function () { return i2cBegin(this, 1); };
+    G['mini_i2c_MXlaser_begin']   = function () { return i2cBegin(this, 2); };
+    G['mini_i2c_MXcolor_begin']   = function () { return i2cBegin(this, 3); };
+    // No bring-up implemented for these yet; emitting nothing is honest —
+    // their read blocks are the ones that would fail, not this.
+    ['mini_i2c_MXGesture_begin', 'mini_i2c_HTcolor_begin',
      'mini_i2c_mxlinetracer_begin'].forEach((t) => { G[t] = function () { return ''; }; });
 
     G['mini_i2c_MXlaser_getDistance'] = function () { return i2cRead(this, 0, 0); };

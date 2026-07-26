@@ -182,6 +182,18 @@ enum class VMOp : uint8_t {
     ///   sensor 2 = MXLineTracer   fn 0 = line width, 1 = error,
     ///                             2 = online?, 3..12 = sensor n-3
     I2C_READ      = 0xF5,
+
+    /// pop sensor, port -> push 1 if the device answered, else 0.
+    /// An I2C sensor needs a real bring-up (model-ID check, register writes,
+    /// continuous mode) — constructing the driver object is not enough. The
+    /// runtime does this lazily inside the telemetry path, but telemetry is
+    /// now gated on the dashboard being visible, so a VM program cannot rely
+    /// on that having happened. Hardware proved this: every sensor read
+    /// returned its not-present sentinel until begin() was actually called.
+    ///   sensor 0 = MXLaserV2 (also sets timeout + continuous mode)
+    ///   sensor 1 = MXColorV3
+    ///   sensor 2 = MXLaser V1        3 = MXColor V1
+    I2C_BEGIN     = 0xF6,
 };
 
 /**

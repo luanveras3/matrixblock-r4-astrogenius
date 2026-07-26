@@ -205,6 +205,22 @@ MiniR4VM::Result MiniR4VM::execLogic(VMOp op)
 // port switch cannot share a pointer — a template keeps the four cases from
 // becoming four copies of the channel logic.
 template <typename PORT>
+static int32_t _beginI2C(PORT& p, uint8_t sensor)
+{
+    switch (sensor) {
+        case 0:
+            if (!p.MXLaserV2.begin()) return 0;
+            p.MXLaserV2.setTimeout(50);
+            p.MXLaserV2.startContinuous(50);
+            return 1;
+        case 1: return p.MXColorV3.begin() ? 1 : 0;
+        case 2: return p.MXLaser.begin()   ? 1 : 0;
+        case 3: return p.MXColor.begin()   ? 1 : 0;
+        default: return 0;
+    }
+}
+
+template <typename PORT>
 static int32_t _readI2C(PORT& p, uint8_t sensor, uint8_t fn)
 {
     switch (sensor) {
@@ -638,6 +654,19 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
                 case 4: out = _readColor(MiniR4.I2C4, (uint8_t)ch); break;
             }
             return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::I2C_BEGIN: {   // pop sensor, port -> push ok
+            int32_t sensor, port;
+            if (!pop(sensor) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            int32_t ok = 0;
+            switch ((uint8_t)port) {
+                case 1: ok = _beginI2C(MiniR4.I2C1, (uint8_t)sensor); break;
+                case 2: ok = _beginI2C(MiniR4.I2C2, (uint8_t)sensor); break;
+                case 3: ok = _beginI2C(MiniR4.I2C3, (uint8_t)sensor); break;
+                case 4: ok = _beginI2C(MiniR4.I2C4, (uint8_t)sensor); break;
+            }
+            return push(ok) ? Result::OK : Result::ERR_STACK_OVERFLOW;
         }
 
         case VMOp::I2C_READ: {   // pop fn, sensor, port -> push value
