@@ -721,6 +721,44 @@
         log(want ? tr('sbTmOn') : tr('sbTmOff'));
     }
 
+    // The HUD and Log panes are sized in pixels from the Code pane, because
+    // they are absolutely positioned siblings and have no height of their own.
+    // That measurement has to be REDONE on resize: taking it once at switch
+    // time is what made "open HUD, then maximise" leave the pane stuck at the
+    // old window's height, while "switch to Code, maximise, switch back"
+    // looked fine — the measurement simply happened after the resize instead
+    // of before it.
+    function syncPaneHeight() {
+        if (!hudMounted || !codeDiv) return;
+        if (activePane === 'code') return;   // Code sizes itself
+        // Measure the CONTAINER, not the Code pane. While the HUD is showing,
+        // codeDiv is display:none and reports height 0, so the old measurement
+        // silently did nothing on resize — which is why "open HUD, then
+        // maximise" left the pane at the small window's height while "Code
+        // first, then maximise" worked: that path measured Code while it was
+        // still visible.
+        const host = hudDiv.parentElement;
+        if (!host) return;
+        const hostH = host.getBoundingClientRect().height;
+        // codeTab is module-scoped; the tab bar is its parent. tabBar itself
+        // is a local of the mount function and not reachable from here.
+        const bar   = codeTab && codeTab.parentElement;
+        const barH  = bar ? bar.getBoundingClientRect().height : 0;
+        const h = hostH - barH;
+        if (h > 0) {
+            hudDiv.style.height = h + 'px';
+            logDiv.style.height = h + 'px';
+        }
+    }
+
+    // Debounced: a maximise fires a burst of resize events, and re-measuring
+    // on each one costs layout for no benefit.
+    let paneResizeTimer = 0;
+    window.addEventListener('resize', () => {
+        clearTimeout(paneResizeTimer);
+        paneResizeTimer = setTimeout(syncPaneHeight, 120);
+    });
+
     function setPane(name) {
         if (!hudMounted) return;
         activePane = name;
@@ -740,11 +778,7 @@
                 }
             } catch (_) {}
         } else {
-            const h = codeDiv.getBoundingClientRect().height;
-            if (h > 0) {
-                hudDiv.style.height = h + 'px';
-                logDiv.style.height = h + 'px';
-            }
+            syncPaneHeight();
         }
         if (name === 'log') logDiv.scrollTop = logDiv.scrollHeight;
     }
