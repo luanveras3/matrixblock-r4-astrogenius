@@ -172,10 +172,11 @@ const L = A.__rewriteWifiLoops;
 // Note: the rewrite preserves the user's original spacing around the
 // keyword — the generated sketch stays as close to what the blocks emitted
 // as possible, so anyone reading it can still recognise their own program.
-check('wait-until busy-wait is pumped',
-    L('while(!MiniR4.BTN_UP.getState());') ===
-    'while(WiFiRuntime.tick(!MiniR4.BTN_UP.getState()));',
-    L('while(!MiniR4.BTN_UP.getState());'));
+// A bare busy-wait on any condition must be pumped. (The specific
+// "wait until BTN_UP" shape is special-cased into waitForStart() — see 4d.)
+check('bare busy-wait is pumped',
+    L('while(!sensorReady);') === 'while(WiFiRuntime.tick(!sensorReady));',
+    L('while(!sensorReady);'));
 check('loop with a body is pumped',
     L('while (a < b) { x++; }') === 'while (WiFiRuntime.tick(a < b)) { x++; }',
     L('while (a < b) { x++; }'));
@@ -225,6 +226,37 @@ check('range-for left alone (not the classic three-part form)',
 check('unbalanced parens do not corrupt the source',
     L('while (a { }') === 'while (a { }', L('while (a { }'));
 
+// --- 4d. the start gate becomes waitForStart() -------------------------------
+// The stock blocks emit exactly `while(!MiniR4.BTN_UP.getState());`
+// (control_wait_until wrapping mini_BTNget). Recognising that shape upgrades
+// existing student programs into remotely-startable gates with no new block.
+check('canonical BTN_UP gate becomes waitForStart',
+    L('while(!MiniR4.BTN_UP.getState());') === 'WiFiRuntime.waitForStart();',
+    L('while(!MiniR4.BTN_UP.getState());'));
+check('spacing variations still recognised',
+    L('while ( ! MiniR4.BTN_UP.getState() ) ;') === 'WiFiRuntime.waitForStart();',
+    L('while ( ! MiniR4.BTN_UP.getState() ) ;'));
+check('BTN_DOWN is NOT a start gate (it is the stop button)',
+    L('while(!MiniR4.BTN_DOWN.getState());') ===
+    'while(WiFiRuntime.tick(!MiniR4.BTN_DOWN.getState()));',
+    L('while(!MiniR4.BTN_DOWN.getState());'));
+check('a gate with a body is left as a pumped loop',
+    L('while(!MiniR4.BTN_UP.getState()) { x++; }') ===
+    'while(WiFiRuntime.tick(!MiniR4.BTN_UP.getState())) { x++; }',
+    L('while(!MiniR4.BTN_UP.getState()) { x++; }'));
+check('an inverted button test is not a start gate',
+    L('while(MiniR4.BTN_UP.getState());') ===
+    'while(WiFiRuntime.tick(MiniR4.BTN_UP.getState()));',
+    L('while(MiniR4.BTN_UP.getState());'));
+check('gate inside a string literal untouched',
+    L('Serial.println("while(!MiniR4.BTN_UP.getState());");') ===
+    'Serial.println("while(!MiniR4.BTN_UP.getState());");',
+    L('Serial.println("while(!MiniR4.BTN_UP.getState());");'));
+check('two gates in one program both convert',
+    L('while(!MiniR4.BTN_UP.getState()); x=1; while(!MiniR4.BTN_UP.getState());') ===
+    'WiFiRuntime.waitForStart(); x=1; WiFiRuntime.waitForStart();',
+    L('while(!MiniR4.BTN_UP.getState()); x=1; while(!MiniR4.BTN_UP.getState());'));
+
 // End to end: the reported reproduction must come out pumped.
 const repro = A.finish([
     '#include <MatrixMiniR4.h>',
@@ -237,9 +269,11 @@ const repro = A.finish([
     '  while(!MiniR4.BTN_DOWN.getState()) { Serial.println(1); }',
     '}',
 ].join('\n'));
-check('reproduction: both gates pumped',
-    repro.includes('while(WiFiRuntime.tick(!MiniR4.BTN_UP.getState()));') &&
-    repro.includes('while(WiFiRuntime.tick(!MiniR4.BTN_DOWN.getState()))'),
+// The start gate becomes waitForStart(); the stop loop stays a pumped loop.
+check('reproduction: start gate converted, stop loop pumped',
+    repro.includes('WiFiRuntime.waitForStart();') &&
+    repro.includes('while(WiFiRuntime.tick(!MiniR4.BTN_DOWN.getState()))') &&
+    !repro.includes('while(!MiniR4.BTN_UP.getState())'),
     repro.slice(repro.indexOf('userLoop')));
 check('reproduction: the OLED string was not touched',
     repro.includes('MiniR4.OLED.print("PRESS UP")'));

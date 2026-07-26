@@ -189,6 +189,27 @@
         return parts.length === 3 ? parts : null;
     }
 
+    // The canonical "wait until <BTN_UP is pressed>" gate, exactly as the
+    // stock generators produce it: control_wait_until emits `while(!X);` and
+    // mini_BTNget emits `MiniR4.BTN_UP.getState()`. Recognising that one
+    // shape upgrades every program a student has already built — no new
+    // block to learn, no toolbox change — into a gate the IDE can release
+    // remotely, on top of the button that still works exactly as before.
+    //
+    // Only BTN_UP. BTN_DOWN is conventionally the *stop* button in these
+    // programs, and silently making it startable from the app would be
+    // a behaviour change nobody asked for.
+    const START_GATE_COND = '!MiniR4.BTN_UP.getState()';
+
+    function isStartGate(cond, src, afterCloseIdx) {
+        if (cond.replace(/\s+/g, '') !== START_GATE_COND) return -1;
+        // Body must be empty — `while(...);`. A gate with a body is doing
+        // something else while it waits and is none of our business.
+        let k = afterCloseIdx;
+        while (k < src.length && /\s/.test(src.charAt(k))) k++;
+        return src.charAt(k) === ';' ? k + 1 : -1;
+    }
+
     function wrapCondition(cond) {
         const trimmed = cond.trim();
         // Already pumped (idempotence), or an empty `for(;;)` condition.
@@ -247,6 +268,13 @@
                             const inner = src.slice(k + 1, close);
                             let rebuilt = null;
                             if (kw === 'while') {
+                                // "wait until BTN_UP" becomes the real thing.
+                                const gateEnd = isStartGate(inner, src, close + 1);
+                                if (gateEnd > 0) {
+                                    out += 'WiFiRuntime.waitForStart();';
+                                    i = gateEnd;
+                                    continue;
+                                }
                                 rebuilt = '(' + wrapCondition(inner) + ')';
                             } else {
                                 const parts = splitForHeader(inner);

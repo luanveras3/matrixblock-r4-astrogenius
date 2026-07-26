@@ -69,8 +69,12 @@ Based on upstream v1.0.8. Format loosely inspired by
   groundwork for the classroom panel (roadmap R7). The runtime reports
   `"waiting"` in `info`, and deliberately does not draw on the OLED — the
   student's own blocks have usually just drawn their prompt there.
-  *Currently reachable from hand-written sketches; wiring it to a block is
-  tracked in `docs/NEXT_SESSION.md`.*
+  **The existing "wait until \<BTN_UP is pressed\>" block gets this for
+  free**: the wrapper recognises the exact shape the stock generators emit
+  and converts it, so every program a student has already built becomes
+  remotely startable with no new block to learn and no toolbox change. Only
+  BTN_UP with an empty body converts — BTN_DOWN is conventionally the stop
+  button and stays an ordinary (pumped) loop.
 
 ### Fixed
 - **Prints inside a loop no longer flood the radio.** Every log frame is a

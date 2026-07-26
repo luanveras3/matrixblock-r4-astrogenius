@@ -30,12 +30,13 @@ was done and the acceptance results. What remains from the original list:
       is the groundwork for the R7 teacher panel.
       Deliberately does not draw on the OLED: the student's blocks have
       usually just drawn their own prompt there.
-- [ ] **Wire `waitForStart()` to a block.** It is a runtime API today, so
-      only hand-written sketches reach it. The natural follow-up is either a
-      dedicated "wait to start" block or teaching the generator to emit it
-      for the canonical `wait until <BTN_UP pressed>` shape. Until then the
-      wrapper's loop rewrite keeps the raw gate safe, just not remotely
-      startable.
+- [x] **`waitForStart()` wired to a block** — done 2026-07-25, without adding
+      one. The wrapper recognises the canonical shape the stock blocks
+      already emit (`control_wait_until` wrapping `mini_BTNget` produces
+      exactly `while(!MiniR4.BTN_UP.getState());`) and converts it. Every
+      program a student has already built becomes remotely startable, with no
+      new block to learn and no toolbox change. Only BTN_UP, only with an
+      empty body; BTN_DOWN is the stop button and stays a pumped loop.
 
 <details>
 <summary>Original entry (kept for context)</summary>
