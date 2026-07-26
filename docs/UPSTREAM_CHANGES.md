@@ -52,8 +52,10 @@ powered and keeps its register state across an RA4M1 reset, so the sensor was
 still carrying the exposure configuration written by the previous firmware.
 Both runs measured a sensor we had already configured.
 
-Neither the original claim nor its correction is established. Anyone retesting
-this must **power-cycle the sensor** (not just the MCU) between conditions.
+**Settled 2026-07-26 with a clean test.** After power-cycling the robot, so the
+sensor came up at factory defaults, the **stock driver** was flashed and read
+`R=63 G=102 B=108`, colour ID 3, with `begin()` succeeding — indistinguishable
+from what our "fix" produced. Your driver is correct; the fault was ours.
 
 What remains on our side: our VM's I2C begin handler waits 60 ms after
 `begin()` before the first read, because a VM program can begin and read in the

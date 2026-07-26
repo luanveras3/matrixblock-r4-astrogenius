@@ -234,13 +234,16 @@ sensor still carrying exposure settings written by an earlier firmware, so
 neither "the driver is underexposed" nor "the delay alone fixes it" was ever
 tested against a clean device.
 
-**To retest properly:** power-cycle the robot between conditions, not just
-reboot the MCU. Conditions worth comparing are stock `begin()` alone, stock
-plus a settling delay, and stock plus exposure configuration.
+**Retested and settled 2026-07-26.** Luan power-cycled the robot, so the sensor
+started from factory defaults, and the stock driver read `R=63 G=102 B=108`,
+ID 3, `begin()` true — matching what the patched driver produced. The vendor
+defaults are fine and the original diagnosis was wrong. The zeros came from
+reading immediately after `begin()`, which the 60 ms wait in our own I2C begin
+handler now covers.
 
-Current known state on hardware: with the vendor driver stock, `begin()`
-returned false and readings were garbage (25/255/25, ID -1) — but that reading
-is itself from a contaminated sensor, so it proves nothing either.
+The intermediate reading that showed `begin()` false and garbage (25/255/25)
+was taken on a sensor still holding configuration from an earlier firmware; a
+power cycle cleared it.
 
 What we kept, entirely on our side: the VM's I2C begin handler waits 60 ms
 before the first read, because a VM program can begin and read in the same
