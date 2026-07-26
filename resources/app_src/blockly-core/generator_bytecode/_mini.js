@@ -397,4 +397,32 @@ goog.require('Blockly.BytecodeVM');
         const n = parseInt(String(this.getFieldValue('SENSOR') || '1'), 10) || 1;
         return i2cRead(this, 2, 3 + Math.max(0, Math.min(9, n - 1)));
     };
+
+    // --- Round 4c: MATRIX port sensors --------------------------------------
+    // These blocks address a port and a side (D4 Left, A1 Left...), never an
+    // Arduino pin, so they need the port-aware opcodes rather than
+    // DIGITAL_READ / ANALOG_READ.
+    function portNum(field, blockType, letter) {
+        const m = new RegExp(letter + '\s*([1-4])', 'i').exec(String(field || ''));
+        if (!m) { G.warn(blockType, 'unknown port: ' + field); return 1; }
+        return parseInt(m[1], 10);
+    }
+    // Side follows the Arduino generator for each block: it emits getL() or
+    // getR() and we mirror whichever it chose, so the VM reads the same wire.
+    function portDigital(block, side) {
+        return [G.pushInt(portNum(block.getFieldValue('PIN'), block.type, 'D')) +
+                G.pushInt(side) + G.byte(G.OPS.PORT_DREAD), G.ORDER_ATOMIC];
+    }
+    function portAnalog(block, side) {
+        return [G.pushInt(portNum(block.getFieldValue('PIN'), block.type, 'A')) +
+                G.pushInt(side) + G.byte(G.OPS.PORT_AREAD), G.ORDER_ATOMIC];
+    }
+
+    G['mini_MXPIR_getState']              = function () { return portDigital(this, 0); };
+    G['mini_MXMiniatureSwitch_getState']  = function () { return portDigital(this, 0); };
+    G['mini_MXPot_getPot']                = function () { return portAnalog(this, 0); };
+    G['mini_MXSoilMoisture_getMoisture']  = function () { return portAnalog(this, 0); };
+    G['mini_MXWaterLevel_getLevel']       = function () { return portAnalog(this, 0); };
+    G['mini_Grove_DIget']                 = function () { return portDigital(this, 0); };
+    G['mini_Grove_AIget']                 = function () { return portAnalog(this, 0); };
 })();

@@ -656,6 +656,33 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
             return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
         }
 
+        case VMOp::PORT_DREAD: {   // pop side, port -> push 0/1
+            int32_t side, port;
+            if (!pop(side) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            const bool r = (side != 0);
+            int32_t v = 0;
+            switch ((uint8_t)port) {
+                case 1: v = r ? MiniR4.D1.getR() : MiniR4.D1.getL(); break;
+                case 2: v = r ? MiniR4.D2.getR() : MiniR4.D2.getL(); break;
+                case 3: v = r ? MiniR4.D3.getR() : MiniR4.D3.getL(); break;
+                case 4: v = r ? MiniR4.D4.getR() : MiniR4.D4.getL(); break;
+            }
+            return push(v ? 1 : 0) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::PORT_AREAD: {   // pop side, port -> push 0..1023
+            int32_t side, port;
+            if (!pop(side) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            const bool r = (side != 0);
+            int32_t v = 0;
+            switch ((uint8_t)port) {
+                case 1: v = r ? MiniR4.A1.getAIR() : MiniR4.A1.getAIL(); break;
+                case 2: v = r ? MiniR4.A2.getAIR() : MiniR4.A2.getAIL(); break;
+                case 3: v = r ? MiniR4.A3.getAIR() : MiniR4.A3.getAIL(); break;
+            }
+            return push(v) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
         case VMOp::I2C_BEGIN: {   // pop sensor, port -> push ok
             int32_t sensor, port;
             if (!pop(sensor) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;

@@ -194,6 +194,15 @@ enum class VMOp : uint8_t {
     ///   sensor 1 = MXColorV3
     ///   sensor 2 = MXLaser V1        3 = MXColor V1
     I2C_BEGIN     = 0xF6,
+
+    /// Read a MATRIX port by name, not by Arduino pin. DIGITAL_READ and
+    /// ANALOG_READ take raw pin numbers, which the block generators never
+    /// produce — every sensor block addresses a port (D1..D4, A1..A3) and a
+    /// side (Left/Right), because that is how the hardware is labelled.
+    ///   PORT_DREAD: pop side(0=L,1=R), port(1..4) -> push 0/1
+    ///   PORT_AREAD: pop side(0=L,1=R), port(1..3) -> push 0..1023
+    PORT_DREAD    = 0xF7,
+    PORT_AREAD    = 0xF8,
 };
 
 /**
