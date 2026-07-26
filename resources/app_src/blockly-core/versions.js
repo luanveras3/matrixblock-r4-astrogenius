@@ -178,7 +178,11 @@
             // Fork-only modules. Catches current builds and the BLE-era ones,
             // whose module names were different.
             const core = hdr.files && hdr.files['blockly-core'] && hdr.files['blockly-core'].files;
-            const forkFiles = ['version.js', 'versions.js', 'channel.js', 'wifi_upload.js',
+            // NOTE: 'versions.js' is deliberately absent — this module gets
+            // injected into other builds, so its presence says nothing about
+            // who made them. 'version.js' (singular) is the fork's own and is
+            // never injected.
+            const forkFiles = ['version.js', 'channel.js', 'wifi_upload.js',
                                'wifi_hud.js', 'connection.js', 'navmenu.js', 'usb_config.js',
                                'bytecode.js', 'arduino_wifi_wrapper.js',
                                'arduino_ble_wrapper.js', 'ble_upload.js', 'generator_bytecode'];
@@ -208,6 +212,23 @@
             catch (e) { /* nice to show, not required */ }
 
             return { fork, version, forkVersion };
+        } finally { fs.closeSync(fd); }
+    }
+
+    /** Does this archive already carry the version menu? */
+    function archiveHasSwitcher(file) {
+        const fs = ofs();
+        const fd = fs.openSync(file, 'r');
+        try {
+            const head = Buffer.alloc(16);
+            fs.readSync(fd, head, 0, 16, 0);
+            const len = head.readUInt32LE(12);
+            const buf = Buffer.alloc(len);
+            fs.readSync(fd, buf, 0, len, 16);
+            const t = buf.toString('utf8');
+            const hdr = JSON.parse(t.slice(0, t.lastIndexOf('}') + 1));
+            const core = hdr.files && hdr.files['blockly-core'] && hdr.files['blockly-core'].files;
+            return !!(core && core['versions.js']);
         } finally { fs.closeSync(fd); }
     }
 
@@ -292,13 +313,45 @@
             return row;
         };
 
-        add(p.active, null, true);
+        // Same bytes as the running build? Then it is the running build under
+        // another name, and a second row for it is noise. Comparing sizes tells
+        // these archives apart and avoids hashing 108 MB on every menu open.
+        let activeSize = -1;
+        try { activeSize = afs.statSync(p.active).size; } catch (e) { /* ignore */ }
+        const sameAsActive = (f) => {
+            try { return afs.statSync(f).size === activeSize; } catch (e) { return false; }
+        };
 
-        for (const c of OFFICIAL_CANDIDATES) {
-            const abs = path.join(p.res, c);
-            let ok = false;
-            try { ok = afs.existsSync(abs) && !inspect(abs).fork; } catch (e) { ok = false; }
-            if (ok) { add(abs, null, false); break; }
+        const running = add(p.active, null, true);
+
+        /*
+         * The build we last switched away from. Without this row the official
+         * app is a dead end from inside the menu — it would list only itself
+         * and its own backup, with no way back to the fork, which is exactly
+         * what happened the first time this shipped.
+         *
+         * Shown only when it is the *other kind* of build. Two AstroGenius rows
+         * with the same version number, one of them a stale parked copy, tell
+         * the reader nothing and invite a switch that changes nothing.
+         */
+        try {
+            if (afs.existsSync(p.ours) && !sameAsActive(p.ours) &&
+                running && inspect(p.ours).fork !== running.fork) {
+                add(p.ours, null, false);
+            }
+        } catch (e) { /* nothing parked, or unreadable */ }
+
+        // Only worth offering when we are not already on it. Running the
+        // official build and being shown a second, identical official row —
+        // its own backup — is a confusing way to say "you are here".
+        if (!(running && running.fork === false)) {
+            for (const c of OFFICIAL_CANDIDATES) {
+                const abs = path.join(p.res, c);
+                let ok = false;
+                try { ok = afs.existsSync(abs) && !inspect(abs).fork && !sameAsActive(abs); }
+                catch (e) { ok = false; }
+                if (ok) { add(abs, null, false); break; }
+            }
         }
 
         for (const m of readManifest(p.res)) if (m && m.file) add(m.file, m, false);
@@ -406,23 +459,56 @@
 
         if (!afs.existsSync(target)) throw new Error(tr('missing'));
 
-        // Park the build being left, so the switch is always reversible.
-        // Reading a locked file is allowed on Windows; only writing over it is
-        // not, which is why this works while the app is still running.
-        try { afs.copyFileSync(p.active, p.ours); } catch (e) { /* best effort */ }
+        /*
+         * Park the build being left, so the switch is always reversible.
+         * Reading a locked file is allowed on Windows; only writing over it is
+         * not, which is why this works while the app is still running.
+         *
+         * Never park onto the target. Switching back to the parked build means
+         * target === the parking slot, and copying the current build there
+         * first overwrites the very archive about to be installed — the switch
+         * then "succeeds" by reinstalling what was already running. Found by
+         * testing the return leg: the app came back up on the official build
+         * having just been asked for the fork, and the parked fork was gone.
+         */
+        const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+        if (!samePath(p.ours, target)) {
+            try { afs.copyFileSync(p.active, p.ours); } catch (e) { /* best effort */ }
+        }
 
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-ver-'));
         const helper = path.join(dir, 'switch.ps1');
-        // Only when leaving the fork for something else — the shortcut exists
-        // to get back to a build whose UI will no longer be there to ask.
+
+        /*
+         * If the target has no version menu of its own, give it one.
+         *
+         * This is what makes the switch two-way from inside the app. The
+         * alternative was a Desktop shortcut, which needs the app closed,
+         * flashes a console window, and in practice left the user stranded on
+         * the build they had switched to.
+         *
+         * The patched copy lives in the temp folder — the archive on disk is
+         * never modified, so a pristine backup stays pristine.
+         */
+        let source = target;
+        let hasMenu = false;
+        try { hasMenu = archiveHasSwitcher(target); } catch (e) { hasMenu = false; }
+        if (!hasMenu) {
+            source = path.join(dir, 'patched.asar');
+            injectSwitcher(target, source);
+        }
+
+        // Belt and braces: the Desktop shortcut is still written when leaving
+        // the fork. The injected menu is the way back now, but a shortcut costs
+        // nothing and covers the case where the injection is what went wrong.
         let back = null;
         if (leavingFork) {
             back = path.join(dir, (lang() === 'pt-BR' ? 'Voltar para AstroGenius' : 'Back to AstroGenius') + '.cmd');
             fs.writeFileSync(back, returnScript(p.exe, p.ours, p.active), 'utf8');
         }
 
-        fs.writeFileSync(helper, helperScript(p.exe, target, p.active, back), 'utf8');
-        return { helper, source: target, p, back };
+        fs.writeFileSync(helper, helperScript(p.exe, source, p.active, back), 'utf8');
+        return { helper, source, p, back };
     }
 
     /*
@@ -585,6 +671,111 @@
         document.removeEventListener('keydown', onKey);
     }
 
+    /* ---------------------------------------------------------------- *
+     * Injecting this module into another build
+     * ---------------------------------------------------------------- */
+
+    /*
+     * Add `blockly-core/versions.js` and a script tag to a target archive.
+     *
+     * Without this the switch is a one-way door: the build you move to has no
+     * version menu, so the only way back is a Desktop shortcut that needs the
+     * app closed and flashes a console window — fragile enough that it failed
+     * in practice. Injecting the switcher means every build can reach every
+     * other build from the same menu.
+     *
+     * Only two things are added and nothing is removed, so the target keeps
+     * its own identity; inspect() ignores this file precisely so an injected
+     * official build is still reported as official.
+     *
+     * Same append-and-rewrite-the-header approach as patch_asar.js: keep the
+     * original data section byte for byte, append the new content, and point
+     * the header entries at it.
+     */
+    function injectSwitcher(srcFile, outFile) {
+        const afs = ofs(), fs = require('fs'), path = require('path');
+
+        // Our own source, read out of the running archive.
+        const self = fs.readFileSync(
+            path.join(process.resourcesPath, 'app.asar', 'blockly-core', 'versions.js'));
+
+        const orig  = afs.readFileSync(srcFile);
+        const hSize = orig.readUInt32LE(12);
+        const dataStart = 16 + hSize;
+        const header = JSON.parse(orig.slice(16, 16 + hSize).toString('utf8'));
+
+        const entry = (p) => {
+            const parts = p.split('/');
+            let node = header.files;
+            for (let i = 0; i < parts.length; i++) {
+                if (!node[parts[i]]) node[parts[i]] = i < parts.length - 1 ? { files: {} } : {};
+                node = i < parts.length - 1 ? node[parts[i]].files : node[parts[i]];
+            }
+            return node;
+        };
+
+        // The target's own main.html, with one script tag added.
+        const mh = header.files['views'].files['main.html'];
+        let html = orig.slice(dataStart + Number(mh.offset),
+                              dataStart + Number(mh.offset) + mh.size).toString('utf8');
+        const NL = String.fromCharCode(10), TAB = String.fromCharCode(9);
+        const tag = '<script type="text/javascript" src="../blockly-core/versions.js"></script>';
+        if (html.indexOf('blockly-core/versions.js') === -1) {
+            const at = html.lastIndexOf('</body>');
+            html = at === -1 ? html + NL + tag : html.slice(0, at) + TAB + tag + NL + html.slice(at);
+        }
+        const htmlBuf = Buffer.from(html, 'utf8');
+
+        let acc = orig.length - dataStart;
+        const appended = [];
+        for (const [p, buf] of [['blockly-core/versions.js', self], ['views/main.html', htmlBuf]]) {
+            const e = entry(p);
+            e.offset = String(acc);
+            e.size   = buf.length;
+            acc += buf.length;
+            appended.push(buf);
+        }
+
+        const hBuf = Buffer.from(JSON.stringify(header), 'utf8');
+        const pad  = (4 - (hBuf.length % 4)) % 4;
+        const prefix = Buffer.alloc(16);
+        prefix.writeUInt32LE(4, 0);
+        prefix.writeUInt32LE(4 + 4 + hBuf.length + pad, 4);
+        prefix.writeUInt32LE(4 + hBuf.length + pad, 8);
+        prefix.writeUInt32LE(hBuf.length, 12);
+
+        afs.writeFileSync(outFile, Buffer.concat(
+            [prefix, hBuf, Buffer.alloc(pad), orig.slice(dataStart), ...appended]));
+    }
+
+    /* ---------------------------------------------------------------- *
+     * Entry point in the menu bar
+     * ---------------------------------------------------------------- */
+
+    /*
+     * Sits in the same dropdown as Update FW. That menu exists in every build,
+     * which is what makes one entry point work everywhere — and it is where
+     * someone already looks for "which version of things am I on".
+     */
+    function installNavItem() {
+        if (document.getElementById('astroVersionsNavLink')) return true;
+        const dfu = document.getElementById('dfuNavLink');
+        if (!dfu) return false;
+        const host = dfu.closest('li') || dfu.parentNode;
+        if (!host || !host.parentNode) return false;
+
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.className = 'dropdown-item';
+        a.id = 'astroVersionsNavLink';
+        a.style.cursor = 'pointer';
+        a.innerHTML = '<i class="bi bi-layers"></i> <span>' + esc(tr('menu')) + '</span>';
+        a.addEventListener('click', (ev) => { ev.preventDefault(); open(); });
+        li.appendChild(a);
+        host.parentNode.insertBefore(li, host.nextSibling);
+        return true;
+    }
+
     window.MBR4Versions = {
         open, close,
         label: () => tr('menu'),
@@ -592,7 +783,19 @@
         _list: list,
         _inspect: (f) => { try { return inspect(f); } catch (e) { return { error: e.message }; } },
         _quit: quitApp,
+        _install: installNavItem,
+        _inject: injectSwitcher,
+        _hasSwitcher: archiveHasSwitcher,
     };
+
+    // The menu bar is upstream markup and we do not control when it lands, so
+    // keep trying for a while rather than assuming it is already there.
+    if (nodeOk && !installNavItem()) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', installNavItem);
+        }
+        [400, 1200, 2500, 4000, 7000].forEach((t) => setTimeout(installNavItem, t));
+    }
 
     console.log('[Versions] versions.js module loaded');
 })();

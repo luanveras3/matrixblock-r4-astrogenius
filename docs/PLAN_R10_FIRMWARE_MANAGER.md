@@ -235,17 +235,41 @@ dialog. That is why the helper now writes `switch.log` next to itself and
 signals readiness with a file the app waits for: if the helper cannot start,
 the app says so and stays open instead of closing for nothing.
 
-#### The return trip
+#### The return trip, and why the menu is injected
 
-Once another build is running there is no AstroGenius UI left to offer a way
-back, so the helper places a `Back to AstroGenius.cmd` on the Desktop — and
-asks Windows where the Desktop is rather than guessing, because it is
-localised and usually redirected into OneDrive. A guessed path put the file in
-a legacy junction the user would never have opened. It is written only after
-the copy succeeds, so a switch that did not happen leaves nothing behind.
+The first design left the switcher only in the fork, with a Desktop shortcut as
+the way home. That failed in practice: the shortcut needs the app closed,
+flashes a console window, and the user ended up stranded on the official build.
 
-Verified end to end by hash, both directions: fork → official (shortcut placed
-on the real Desktop, app relaunched) → fork.
+So the switch now **injects `versions.js` plus one script tag into the target
+archive** — the same append-and-rewrite-the-header trick as `patch_asar.js`.
+Every build can therefore reach every other build from the same menu.
+
+Three things this is careful about:
+
+- The patched copy is written to a temp folder. The archive on disk is never
+  modified, so a pristine backup stays pristine.
+- `inspect()` deliberately ignores `versions.js` when deciding whether an
+  archive is a fork build. It gets injected into other people's builds, so its
+  presence says nothing about who made them — an injected official build must
+  still report as official. `version.js` (singular) is the fork's own marker
+  and is never injected.
+- The menu entry installs itself next to **Update FW**, a dropdown that exists
+  in every build. One entry point, same place, whichever version is running.
+
+The Desktop shortcut is still written when leaving the fork. It costs nothing
+and covers the case where the injection is the thing that failed.
+
+**A bug the return leg exposed.** Parking the outgoing build wrote it over
+`app.asar.astrogenius` — which, when switching *back* to that parked build, is
+the target. The current build landed on top of the archive about to be
+installed, so the switch "succeeded" by reinstalling what was already running,
+and the parked fork was destroyed. Parking is now skipped when the parking slot
+is the target.
+
+Verified end to end from a clean slate, both directions, entirely from inside
+the app: fork → official (no WiFi upload, Versions menu present, offering
+AstroGenius) → fork.
 
 ## 8. Project file compatibility, both directions
 
