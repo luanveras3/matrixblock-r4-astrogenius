@@ -105,6 +105,32 @@ Telemetry is also gated on the dashboard being visible (measured 0 / 45 / 0
 frames per 5 s: hidden, open, left). Between the two, the radio now works only
 when someone is actually using it.
 
+## 3c. OTA over the shared socket — STILL NOT VALIDATED, and two new bugs
+
+Attempted 2026-07-25, did not complete. Record so the next attempt starts
+informed rather than repeating it:
+
+1. **`{"t":"radio","on":true}` leaves the sockets wedged.** It does
+   `WiFi.end()` then `beginAP()` in place and rebinds UDP/TCP right after —
+   the same modem mode-transition race already removed from
+   `_refreshMacIdentity` by rebooting instead. Observed: after `radio on` the
+   hub answers ping and reports `mode:ap, ip:192.168.4.1`, but UDP discovery
+   finds nothing; a reboot fixes it every time. **Fix the same way: reboot
+   instead of re-initialising in place.** Until then, `radio on` should be
+   considered "needs a power cycle to be useful".
+
+2. **A client that dies mid-OTA appears to lock the runtime out.** The probe's
+   Electron window closed during the upload and afterwards the hub refused new
+   TCP connections and stopped answering discovery, recovered only by a USB
+   reflash. The runtime is single-client; it likely never noticed the dead
+   peer. Worth a `_pollCommands` review: drop `g_client` on a stale/half-open
+   socket (idle timeout or write failure) so one crashed client cannot take
+   the robot off the network.
+
+Neither bug is in the shared-socket conversion itself — but both must be
+understood before trusting an OTA through it. Run the upload from the real
+"Send via WiFi" button, watching `docs/poc` bench tools, before relying on it.
+
 ## 4. Still open from before
 
 - Release (§6 of `HANDOFF_NEXT_PHASES.md`): tag, GitHub Actions build,
