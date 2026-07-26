@@ -20,6 +20,56 @@
 !CHANGELOG.md
 !INSTALL.md
 !RELEASE.md
+!MANUAL_WIFI_TCP_OTA.md
+!ROADMAP.md
+!docs/
+!docs/*.md
+!docs/poc/
+!docs/poc/**
+
+# WiFi TCP + OTA tooling (bin2ota port, cross-check, fixtures)
+!tools/
+!tools/bin2ota.js
+!tools/bin2ota.test.js
+!tools/wifi_wrapper.test.js
+!tools/run_tests.js
+# VM bytecode suites, recovered from the BLE branch before it was archived.
+!tools/vm_assembler.test.js
+!tools/vm_handlers.test.js
+!tools/vm_hardware_handlers.test.js
+!tools/vm_procedures.test.js
+!tools/bytecode_map.test.js
+!tools/hubctl.js
+# Probe scripts stay untracked on purpose, but this one is shared
+# infrastructure: it encodes how to answer the app's startup/quit dialogs,
+# which two failed OTA validations were misdiagnosed for lack of.
+!probe_helpers.js
+!tools/stress_upload_wifi.js
+!tools/lzss_ref.py
+!tools/fixtures/
+!tools/fixtures/blink.bin
+!tools/fixtures/UNOR4WIFI_Animation.ota
+
+# WiFi runtime firmware module (delta over the stock MatrixMiniR4 lib).
+# Each level re-ignores its children so un-ignoring a directory does not
+# drag the whole stock library (a full copy lives untracked in the tree).
+!arduino/libraries/
+arduino/libraries/*
+!arduino/libraries/MatrixMiniR4/
+arduino/libraries/MatrixMiniR4/*
+!arduino/libraries/MatrixMiniR4/src/
+arduino/libraries/MatrixMiniR4/src/*
+!arduino/libraries/MatrixMiniR4/src/Modules/
+arduino/libraries/MatrixMiniR4/src/Modules/*
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.h
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.cpp
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4VM.h
+!arduino/libraries/MatrixMiniR4/src/Modules/MiniR4VM.cpp
+!arduino/libraries/MatrixMiniR4/examples/
+arduino/libraries/MatrixMiniR4/examples/*
+!arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/
+!arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**
+arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**/.build/
 
 # GitHub Actions
 !.github/
@@ -35,6 +85,22 @@
 !resources/app_src/blockly-core/msg/scratch_msgs.js
 !resources/app_src/blockly-core/blocks/
 !resources/app_src/blockly-core/blocks/_mini.js
+!resources/app_src/blockly-core/arduino_wifi_wrapper.js
+!resources/app_src/blockly-core/wifi_upload.js
+!resources/app_src/blockly-core/wifi_hud.js
+!resources/app_src/blockly-core/wifi_vm_upload.js
+!resources/app_src/blockly-core/wifi_vm_debug.js
+!resources/app_src/blockly-core/usb_config.js
+!resources/app_src/blockly-core/connection.js
+!resources/app_src/blockly-core/navmenu.js
+!resources/app_src/blockly-core/version.js
+!resources/app_src/blockly-core/versions.js
+!resources/app_src/assets/
+!resources/app_src/assets/img/
+!resources/app_src/assets/img/astrogenius-badge.png
+!resources/app_src/blockly-core/bytecode.js
+!resources/app_src/blockly-core/generator_bytecode/
+!resources/app_src/blockly-core/generator_bytecode/**
 !resources/app_src/views/
 !resources/app_src/views/main.html
 

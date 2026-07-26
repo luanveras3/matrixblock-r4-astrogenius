@@ -115,6 +115,26 @@
 				filter: grayscale(60%) opacity(0.55);
 				transition: filter 0.2s;
 			}
+			/* Narrow windows: let the navbar wrap instead of running off the
+			   right edge. Measured before this rule — at a 900px window the
+			   left group (logo, badge, project name) took 603px and the
+			   button group 389px, so 92px were simply cut off, and nothing in
+			   the stock bar is responsive. Wrapping keeps every control
+			   reachable; the content area already positions itself from the
+			   measured navbar height, so a second row costs nothing but
+			   vertical space on a window that small. */
+			@media (max-width: 1100px) {
+				nav .container-fluid {
+					flex-wrap: wrap !important;
+					row-gap: 2px;
+				}
+				nav .container-fluid > #boardNav {
+					margin-left: 0 !important;
+					flex: 1 1 100%;
+					justify-content: flex-end;
+				}
+			}
+
 			/* Push content-Div below nav (53px) + tab bar (32px) */
 			.mainContainer { display: flex !important; flex-direction: column !important; height: 100vh !important; }
 			.content-Div {
@@ -337,6 +357,27 @@
 			<nav class="navbar navbar-expand navbar-dark" style="background-color: #008184; z-index: 1049">
 				<div class="container-fluid">
 					<a class="navbar-brand me-0"><img src="../assets/img/nav-logo.png" width="156px" height="53px" /></a>
+					<!-- AstroGenius Edition badge — the fork's identity next to the MATRIX brand.
+					     Brazil flag as inline SVG so it renders crisp at any zoom and doesn't
+					     depend on the platform emoji font (Windows renders 🇧🇷 as "BR" text). -->
+					<div class="navbar-brand d-flex align-items-center ms-2" style="padding-left:12px; border-left:1px solid rgba(255,255,255,0.3); color:#fff;" title="AstroGenius Edition — Brasil">
+						<img src="../assets/img/astrogenius-badge.png" width="42" height="42" alt="AstroGenius" style="margin-right:8px;" />
+						<div style="line-height:1.1;">
+							<div style="font-size:10px; opacity:0.85; letter-spacing:0.08em; text-transform:uppercase; font-weight:600;">AstroGenius</div>
+							<div style="display:flex; align-items:center; gap:6px;">
+								<span style="font-size:13px; font-weight:700;">Edition</span>
+								<!-- Channel chip. Filled by version.js so the string lives in one
+								     place; the markup carries a default in case JS is late. -->
+								<span id="astroVersionChip" style="font-size:9px; font-weight:700; letter-spacing:.06em; background:rgba(255,255,255,.22); border:1px solid rgba(255,255,255,.35); border-radius:3px; padding:1px 4px;">BETA</span>
+								<svg viewBox="0 0 700 490" width="20" height="14" xmlns="http://www.w3.org/2000/svg" style="border-radius:2px; box-shadow:0 0 0 1px rgba(255,255,255,0.25);" aria-label="Brasil" role="img">
+									<title>Brasil</title>
+									<rect width="700" height="490" fill="#009c3b"/>
+									<polygon points="350,45 655,245 350,445 45,245" fill="#ffdf00"/>
+									<circle cx="350" cy="245" r="88" fill="#002776"/>
+								</svg>
+							</div>
+						</div>
+					</div>
 					<div class="navbar-nav">
 						<div class="btn-group">
 							<li class="nav-item dropdown">
@@ -476,6 +517,33 @@
 	<!-- <script type="module" src="../src/app.js"></script> -->
 	<!-- <script type="text/javascript" src="../app.bundle.js"></script> -->
 	<script type="text/javascript" src="../app.compressed.js"></script>
+	<!-- WiFi TCP + OTA upload (feature/wifi-tcp-ota):
+	     arduino_wifi_wrapper.js patches Blockly.Arduino.finish so every
+	     compiled sketch embeds the MiniR4WiFiRuntime (always reachable);
+	     wifi_upload.js adds the "Send via WiFi" button, robot picker and
+	     OTA progress UI. Both are additive — USB upload is untouched. -->
+	<script type="text/javascript" src="../blockly-core/arduino_wifi_wrapper.js"></script>
+	<script type="text/javascript" src="../blockly-core/wifi_upload.js"></script>
+	<script type="text/javascript" src="../blockly-core/wifi_hud.js"></script>
+	<!-- R2: bytecode VM path — fast iteration alongside OTA/USB. bytecode.js
+	     defines Blockly.BytecodeVM; the generator_bytecode/*.js files add
+	     per-category emitters; wifi_vm_upload.js adds the "Send VM" button. -->
+	<script type="text/javascript" src="../blockly-core/bytecode.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/_mini.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/control.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/data.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/drivedc.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/math.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/operators.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/pins.js"></script>
+	<script type="text/javascript" src="../blockly-core/generator_bytecode/procedures.js"></script>
+	<script type="text/javascript" src="../blockly-core/wifi_vm_upload.js"></script>
+	<script type="text/javascript" src="../blockly-core/wifi_vm_debug.js"></script>
+	<script type="text/javascript" src="../blockly-core/usb_config.js"></script>
+	<script type="text/javascript" src="../blockly-core/connection.js"></script>
+	<script type="text/javascript" src="../blockly-core/version.js"></script>
+	<script type="text/javascript" src="../blockly-core/versions.js"></script>
+	<script type="text/javascript" src="../blockly-core/navmenu.js"></script>
 	<!--
 		AstroGenius extensions for MATRIXblock Mini R4:
 		  - Tab manager (multiple projects open simultaneously)

@@ -6,6 +6,224 @@ Based on upstream v1.0.8. Format loosely inspired by
 
 ---
 
+## [v4.0.0-beta] — 2026-07-26
+
+The wireless release. Everything below runs over WiFi and needs no cable, and
+none of it existed in v3.x — hence the major bump rather than a 3.5.
+
+**This is a BETA of a community fork.** The app labels itself so, and the
+official MATRIXblock Mini R4 v1.0.8 from MATRIX Robotics remains the stable
+product. Problems with the features listed here belong to this fork, not to
+MATRIX. A Versions menu switches between the two builds in one click.
+
+### Added — version management
+- **Versions menu**, in the same dropdown as Update FW. Lists the builds
+  installed side by side and switches between them: the app closes and reopens
+  on the one you pick. The switcher is injected into the target build, so the
+  official app can switch back from inside itself. A `versions.json` next to
+  `app.asar` adds more builds with no code change — `file` is the only required
+  field, and the version number is read out of the archive so a label cannot
+  disagree with what is installed.
+- **Version identity in the navbar.** Names both the fork's own version and the
+  upstream release it is built on (read from the archive at runtime, so an
+  upstream bump reports itself), and marks this build BETA.
+- **OTA is refused early when it cannot work.** The hub reports its ESP32-S3
+  firmware version, and an upload below 0.5.0 now fails in about a second with
+  a message naming the version found and the one required — instead of dying
+  inside `OTAUpdate` after a full compile.
+
+### Withdrawn
+- **Live block debug is no longer in the menus.** The machinery is intact and
+  reachable from the console (`window.MBR4VMDebug._install()`), because the
+  problem is the experience rather than the protocol. Everything else below is
+  unchanged.
+
+### Fixed
+- **The USB lamp said "no cable" with the cable plugged in.** It was reporting
+  whether our serial link was open, and that link is released whenever the
+  connection panel closes so it never blocks an upload — meaning the normal,
+  healthy state rendered as unplugged. Cable presence and link state are now
+  separate.
+
+### Test coverage
+- The four VM bytecode suites from the retired BLE branch (assembler, generator
+  handlers, hardware handlers, procedures) were ported and pass unmodified,
+  which also confirms the bytecode layer survived the BLE→WiFi migration
+  without regressing. `node tools/run_tests.js` — 7 suites, 151 assertions.
+
+### Known behaviour, worth reading before reporting it
+- **Going back to the official build does not turn the radio off.** The
+  ESP32-S3 keeps the access point up across a reflash of the main MCU, so the
+  robot still appears in the WiFi list, still answers a ping, and port 47802
+  still accepts a connection — with nothing behind any of it, and the radio
+  still drawing current. Only a full power cycle brings it down. The switch
+  dialog says so, and `docs/POC_OTA_FINDINGS.md` has the measurements.
+
+### Added — earlier in this cycle
+- **Live block debug (R2, the differentiator).** With a VM program running,
+  the IDE follows execution *in the workspace*: the block the robot is
+  currently executing glows, and a debug panel offers pause / resume /
+  single-step plus a live view of the VM's variables. Right-click any
+  statement block to set a breakpoint — the robot stops there and the block
+  stays lit while the student inspects.
+  - The compiler now emits a **source map** (`blockMap`: `[{pc, blockId}]`)
+    alongside the bytecode. It never leaves the IDE: the hub streams raw
+    program counters (`{"t":"pc","addr":N,"run":0|1}`, ~10 Hz) and the editor
+    resolves them by binary search, so the wire format stays independent of
+    how the compiler evolves and the firmware pays nothing for it.
+  - Breakpoints are keyed by block id, not pc, so they survive a recompile.
+  - New firmware commands: `vm_debug`, `vm_pause`, `vm_resume`, `vm_step`,
+    `vm_break` (`add`/`del`/`clear`, up to 8), `vm_vars`, `vm_info`.
+  - The runtime accepts a single TCP client, so the debugger shares the HUD's
+    connection through a new `MBR4Hud.send/onFrame/onConnect` bus rather than
+    fighting for the socket.
+- **VM programs can stay on the robot.** "Keep this program on the robot" in
+  the Send-VM window writes the bytecode to dataflash (blocks 1..4, magic
+  `MBVM`, CRC-16 + per-build sketch id); the hub then auto-runs it at every
+  power-on with no computer present. A "Forget saved" button, `vm_forget`,
+  and any reflash clear it. Programs are matched to the exact sketch they
+  were uploaded against, so a USB/OTA reflash never leaves stale bytecode
+  running on top of a program the student has since replaced.
+- **Print blocks reach the wireless console (R3 v2).** The wrapper now
+  rewrites `Serial.print`/`Serial.println` into `WiFiRuntime.logPrint`/
+  `logPrintln`, which mirror to USB Serial *and* the IDE's Log tab. Output is
+  line-buffered, so `print("x="); print(3); println()` arrives as the single
+  line `x=3` — the same thing the serial monitor shows. `Serial.begin`,
+  `read`, `write` and `available` are untouched.
+
+- **Hub setup over the USB cable.** New "USB Setup" panel: rename the robot,
+  store or forget the classroom WiFi, change the AP password, clear a saved
+  VM program, restart, and factory reset — all over Serial. It exists because
+  every other configuration path went through the radio, which made the
+  network a prerequisite for fixing the network: a hub with wrong credentials,
+  a forgotten AP password, an SSID nobody can guess, or a modem that stopped
+  answering used to need a reflash from a terminal.
+  - No second protocol: `MiniR4WiFiRuntime::_pollSerial()` feeds the same
+    NDJSON `_handleLine()` dispatcher as TCP, so every command works on both
+    transports the day it is added. The channel is opened before anything
+    that can fail — a hub with no WiFi module at all still answers.
+  - The panel reports **which WiFi network to actually join**, and warns when
+    a rename or reset means that name changes on the next restart. That gap
+    (the radio still carrying the previous name) is the most common reason a
+    robot "cannot be found anywhere".
+  - Low-battery warning: a weak pack makes WiFi unreliable while USB keeps
+    working, which reads as a broken robot.
+
+- **"Press to start" is now a first-class runtime concept, and can be started
+  from the app.** `WiFiRuntime.waitForStart()` replaces the raw
+  `while (!BTN_UP);` gate that opens practically every student program. While
+  parked it keeps the robot fully reachable — so the state a robot spends
+  most of its idle life in became the state it is easiest to upload to — and
+  it releases on BTN_UP *or* on `{"t":"start"}` from the IDE. The HUD grows a
+  green **Start** button whenever a connected robot reports it is waiting, so
+  a teacher can start a robot without walking over to it; that is the
+  groundwork for the classroom panel (roadmap R7). The runtime reports
+  `"waiting"` in `info`, and deliberately does not draw on the OLED — the
+  student's own blocks have usually just drawn their prompt there.
+  **The existing "wait until \<BTN_UP is pressed\>" block gets this for
+  free**: the wrapper recognises the exact shape the stock generators emit
+  and converts it, so every program a student has already built becomes
+  remotely startable with no new block to learn and no toolbox change. Only
+  BTN_UP with an empty body converts — BTN_DOWN is conventionally the stop
+  button and stays an ordinary (pumped) loop.
+
+### Fixed
+- **Prints inside a loop no longer flood the radio.** Every log frame is a
+  synchronous ~100 ms modem write — the same budget telemetry spends — so a
+  print inside a tight loop was a denial of service the student aimed at
+  their own robot. Outgoing log lines are now rate-limited with a token
+  bucket (5 lines/s, burst of 8), with a "N line(s) dropped" summary at most
+  once a second so output is never lost silently. **USB Serial is not
+  throttled**: the serial monitor keeps full speed, and the sketch itself
+  runs faster now that most lines no longer block on the modem (measured:
+  25 lines/s over USB against 5.7/s over WiFi).
+- **Blocking user code no longer takes the hub off the network.** The runtime
+  is cooperatively scheduled, so any loop that does not return starved
+  discovery, TCP, telemetry *and* the USB channel. This was not an edge case:
+  the board starts executing the instant it resets, so students gate their
+  programs with "wait until BTN_UP is pressed", which the generator compiles
+  to a bare `while(!cond);` — the typical program took the hub off the
+  network from boot. Loop conditions are now wrapped in
+  `WiFiRuntime.tick(...)`, which services every transport, steps the VM and
+  throttles itself so tight loops stay tight. Validated on hardware with the
+  reported reproduction: parked on the gate with no button pressed, the hub
+  answers discovery, TCP, USB, and runs a VM program sent to it.
+- **A factory reset left the hub reporting an empty name** until the next
+  boot rebuilt it, which the USB panel showed as "?" — a successful reset
+  looking like a failed one.
+- **A factory reset could leave the hub answering ping but nothing else.**
+  Clearing the cached MAC forces the boot path that used to restart the AP in
+  place and then bind the UDP/TCP sockets on the freshly restarted netif —
+  the same "sockets up right after a modem mode transition" window that
+  wedged a hub once before. The runtime now persists the MAC and reboots once
+  instead, so the AP comes up exactly once with the right SSID and sockets
+  bind on a netif that never changes under them. Costs one extra ~3 s reboot,
+  only on the first boot after a factory reset or on a brand-new hub. The
+  wedge itself was never reproducible on demand (5/5 clean before the change,
+  4/4 after), so this removes the known-risky path rather than claiming a
+  proven root cause; recovery has always been, and remains, a USB reflash.
+- **A factory reset now also clears a saved VM program.** It used to erase
+  only the config block, so the hub came back "factory fresh" and still
+  auto-ran the old bytecode — which suppresses `userLoop`, making the robot
+  ignore its own program right after the command the user reached for to fix
+  things.
+- **Creating a variable broke the Blockly toolbox.** The live debugger added
+  its context-menu item by defining `customContextMenu` on
+  `Blockly.BlockSvg.prototype`; `data_variable` and `data_listcontents` get
+  theirs from an extension mixin, and `Blockly.Block.mixin` refuses to
+  overwrite a member visible on the prototype chain, so `jsonInit` threw and
+  the block was never constructed. The hook is now installed as a temporary
+  own property around `showContextMenu_` instead.
+
+### Changed
+- VM program ceiling is now **3584 bytes** (was 4096). UNOWIFIR4's linker
+  reserves a fixed 8 KB heap and 1 KB stack out of 32 KB, leaving exactly
+  23296 bytes for statics; the debug state and print buffer did not fit in
+  the 106 bytes of slack the old buffer left. ~600-700 Blockly blocks still
+  fit, and the OTA path remains unlimited.
+
+### Added (2026-07-22)
+- **Send via WiFi (real OTA upload).** New nav button compiles the blocks to
+  a full Arduino sketch (same toolchain as USB) and uploads it wirelessly:
+  the ESP32-S3 modem downloads the `.ota` from an ephemeral HTTP server in
+  the IDE and reflashes the RA4M1 via the official `OTAUpdate` library.
+  Replaces the BLE/bytecode-VM approach (kept on its own branch): 100% block
+  coverage, no 6 KB program ceiling, seconds instead of minutes per upload.
+  - Robot picker (UDP discovery on 47801): name, IP, battery, firmware and
+    AP/station mode; multiple robots on one network are told apart. Fixes at
+    the root the duplicate-name pain documented on the BLE branch.
+  - Per-robot settings dialog: rename the hub and store the classroom WiFi
+    credentials on the robot (`setname` / `setwifi` over TCP 47802, NDJSON).
+  - Live progress (compile / convert / download % / verify / flash) and an
+    automatic single retry. All strings EN + pt-BR.
+- **`MiniR4WiFiRuntime` firmware module** (`src/Modules/`): STA with AP
+  fallback (`MBR4-<mac4>` / `matrix2026`), discovery responder, NDJSON
+  command server, telemetry frames byte-compatible with the BLE branch
+  (base64 inside `{"t":"tm"}`), `safeDelay()` anti-starvation, credentials
+  in dataflash block 6 (magic `MBRW`), and a **BTN_UP recovery mode**
+  ("OTA MODE" on the OLED) that guarantees a hub with a broken sketch can
+  always be reflashed without USB. Example: `examples/7-WiFi Runtime/`.
+  Wrapper injects the runtime into every compiled sketch — USB or WiFi —
+  so the hub stays reachable (`blockly-core/arduino_wifi_wrapper.js`).
+- **`tools/bin2ota.js`**: dependency-free Node port of Arduino's
+  `lzss.c` + `bin2ota.py`. Test suite proves byte-identical output against
+  Arduino's own encoder (official `UNOR4WIFI_Animation.ota` fixture is
+  decoded and re-encoded to equality) plus a second, independent Python
+  transliteration (`tools/lzss_ref.py`).
+- **Docs**: `docs/WIFI_UPLOAD.md` (user guide), `docs/POC_OTA_FINDINGS.md`
+  (Fase 0 findings + hardware checklist), `docs/poc/OTA_POC/` (hardware
+  validation sketch), `tools/stress_upload_wifi.py` (20-round stress tool).
+
+### Changed (2026-07-22)
+- `patch_asar.js` can now add files that don't exist in the pristine asar
+  (creates header entries), used for the two new `blockly-core/` modules.
+
+### Pending hardware validation
+- Fase 5 leftovers: two-robot picker (needs a second hub) and the BTN_UP
+  recovery rescue with a deliberately-blocking sketch.
+
+---
+
 ## [v3.4.1-hotfix] — 2026-07-16
 
 ### Fixed

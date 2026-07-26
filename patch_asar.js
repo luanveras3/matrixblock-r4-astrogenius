@@ -23,11 +23,44 @@ const OUT      = process.env.ASAR_OUT     || 'C:/matrixblock-r4/resources/app.as
 const SRC_DIR  = process.env.ASAR_SRC_DIR || 'C:/matrixblock-r4/resources/app_src';
 
 // Files to patch: [pathInsideAsar, pathRelativeToSRC_DIR]
+// Files that don't exist in the original asar (e.g. the WiFi uploader) get a
+// fresh header entry created for them — see getOrCreateEntry().
 const PATCHES = [
-  ['app.compressed.js',                'app.compressed.js'],
-  ['blockly-core/msg/scratch_msgs.js', 'blockly-core/msg/scratch_msgs.js'],
-  ['blockly-core/blocks/_mini.js',     'blockly-core/blocks/_mini.js'],
-  ['views/main.html',                  'views/main.html'],
+  ['app.compressed.js',                       'app.compressed.js'],
+  ['blockly-core/msg/scratch_msgs.js',        'blockly-core/msg/scratch_msgs.js'],
+  ['blockly-core/blocks/_mini.js',            'blockly-core/blocks/_mini.js'],
+  ['blockly-core/arduino_wifi_wrapper.js',    'blockly-core/arduino_wifi_wrapper.js'],
+  ['blockly-core/wifi_upload.js',             'blockly-core/wifi_upload.js'],
+  ['blockly-core/wifi_hud.js',                'blockly-core/wifi_hud.js'],
+  // R2 — bytecode VM (fast iteration via WiFi TCP)
+  ['blockly-core/wifi_vm_upload.js',                  'blockly-core/wifi_vm_upload.js'],
+  // R2 — live block debugger (pc stream -> block highlight, breakpoints)
+  ['blockly-core/wifi_vm_debug.js',                   'blockly-core/wifi_vm_debug.js'],
+  // Unified connection manager (USB + WiFi in one surface).
+  ['blockly-core/connection.js',                      'blockly-core/connection.js'],
+  // Groups this fork's navbar buttons into one dropdown (the stock bar is
+  // fixed-width and we overflowed it).
+  // Single source of truth for "which version am I running": the fork's own
+  // version and channel, plus the upstream release it is built on.
+  ['blockly-core/version.js',                         'blockly-core/version.js'],
+  // Side-by-side app builds: list them, switch with one click.
+  ['blockly-core/versions.js',                        'blockly-core/versions.js'],
+  ['blockly-core/navmenu.js',                         'blockly-core/navmenu.js'],
+  // Hub configuration over the USB cable — the path that does not depend on
+  // the network being configured.
+  ['blockly-core/usb_config.js',                      'blockly-core/usb_config.js'],
+  // AstroGenius Edition badge shown in the navbar next to the MATRIX logo.
+  ['assets/img/astrogenius-badge.png',                'assets/img/astrogenius-badge.png'],
+  ['blockly-core/bytecode.js',                        'blockly-core/bytecode.js'],
+  ['blockly-core/generator_bytecode/_mini.js',        'blockly-core/generator_bytecode/_mini.js'],
+  ['blockly-core/generator_bytecode/control.js',      'blockly-core/generator_bytecode/control.js'],
+  ['blockly-core/generator_bytecode/data.js',         'blockly-core/generator_bytecode/data.js'],
+  ['blockly-core/generator_bytecode/drivedc.js',      'blockly-core/generator_bytecode/drivedc.js'],
+  ['blockly-core/generator_bytecode/math.js',         'blockly-core/generator_bytecode/math.js'],
+  ['blockly-core/generator_bytecode/operators.js',    'blockly-core/generator_bytecode/operators.js'],
+  ['blockly-core/generator_bytecode/pins.js',         'blockly-core/generator_bytecode/pins.js'],
+  ['blockly-core/generator_bytecode/procedures.js',   'blockly-core/generator_bytecode/procedures.js'],
+  ['views/main.html',                         'views/main.html'],
 ];
 
 console.log('Reading original asar backup...');
@@ -44,13 +77,19 @@ console.log('origDataSize :', origDataSize);
 const headerJson = orig.slice(16, 16 + origHSize).toString('utf8');
 const header = JSON.parse(headerJson);
 
-function getEntry(filePath) {
+function getOrCreateEntry(filePath) {
   const parts = filePath.split('/');
   let node = header.files;
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
-    const child = node[p];
-    if (!child) throw new Error('Cannot find ' + filePath + ' in header at: ' + p);
+    let child = node[p];
+    if (!child) {
+      // New file (or intermediate dir) not present in the pristine asar —
+      // create the header node; offset/size are filled by the caller.
+      child = i < parts.length - 1 ? { files: {} } : {};
+      node[p] = child;
+      console.log('Creating new asar entry:', parts.slice(0, i + 1).join('/'));
+    }
     if (i < parts.length - 1) {
       node = child.files;
       if (!node) throw new Error('Expected .files on dir node: ' + p);
@@ -66,7 +105,7 @@ const patchedFiles = [];
 let offsetAccum = origDataSize;
 
 for (const [asarPath, srcPath] of PATCHES) {
-  const entry = getEntry(asarPath);
+  const entry = getOrCreateEntry(asarPath);
   const buf = fs.readFileSync(path.join(SRC_DIR, srcPath));
 
   if (buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF)
