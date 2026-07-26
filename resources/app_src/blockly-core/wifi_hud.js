@@ -45,6 +45,8 @@
             hudStart:        'Start',
             hudStartTitle:   'Start the program on this robot (it is waiting for BTN_UP)',
             hudStartSent:    'Start sent.',
+            sbTmOn:          'Live data on (dashboard visible).',
+            sbTmOff:         'Live data off to save battery.',
             // Sub-tabs
             sbSubTabState:   'State',
             sbSubTabPorts:   'Ports',
@@ -100,6 +102,8 @@
             hudStart:        'Iniciar',
             hudStartTitle:   'Iniciar o programa neste robô (ele está esperando o BTN_UP)',
             hudStartSent:    'Comando de início enviado.',
+            sbTmOn:          'Dados ao vivo ligados (painel visível).',
+            sbTmOff:         'Dados ao vivo desligados para economizar a bateria do robô.',
             sbSubTabState:   'Estado',
             sbSubTabPorts:   'Portas',
             sbSectionConn:   'Conexão',
@@ -245,6 +249,11 @@
     // back to it every round — so poll rather than relying on the connect-time
     // reply. 3 s is well under the modem budget and keeps the button honest.
     setInterval(pollWaitingState, 3000);
+    // Minimising the IDE is as good a signal as switching panes: nobody is
+    // reading the dashboard, so the robot should stop paying for it.
+    document.addEventListener('visibilitychange', () => {
+        try { applyTelemetry(); } catch (_) {}
+    });
 
     function setWaiting(waiting) {
         if (!startBtn) return;
@@ -252,6 +261,7 @@
     }
     let codeDiv = null, hudDiv = null, logDiv = null;
     let activePane = 'code';
+    let telemetryOn = false;   // what the robot is currently doing
     let hudConnected = false;
 
     // --- fmtUptime -----------------------------------------------------------
@@ -692,9 +702,30 @@
         el.style.fontWeight = active ? '600' : '400';
         el.style.background = active ? 'rgba(0,0,0,0.25)' : 'transparent';
     }
+    // --- Telemetry gate ---------------------------------------------------
+    // The stream is the robot's biggest continuous radio cost: ~10 frames a
+    // second, each ~100 ms of modem time, which is most of what the radio can
+    // do. It used to start on every connect and never stop — and since the
+    // default pane is Code, a robot typically streamed a dashboard nobody had
+    // opened, draining the battery for nothing. Now it follows the pane, and
+    // stops when the window is hidden.
+    let telemetryWanted = false;
+    function applyTelemetry() {
+        const want = telemetryWanted &&
+                     activePane === 'hud' &&
+                     !document.hidden &&
+                     hudConnected;
+        if (want === telemetryOn) return;
+        telemetryOn = want;
+        try { hudClient.send({ t: 'telemetry', on: want, hz: 10 }); } catch (_) {}
+        log(want ? tr('sbTmOn') : tr('sbTmOff'));
+    }
+
     function setPane(name) {
         if (!hudMounted) return;
         activePane = name;
+        telemetryWanted = true;   // a pane switch is the user looking
+        applyTelemetry();
         codeDiv.style.display = (name === 'code') ? '' : 'none';
         hudDiv.style.display  = (name === 'hud')  ? 'block' : 'none';
         logDiv.style.display  = (name === 'log')  ? 'block' : 'none';
@@ -1253,8 +1284,12 @@
             }
             dispatchFrame(o);
         };
-        // Ask for the stream + push initial DHT mask (opt-in ports only).
-        try { client.send({ t: 'telemetry', on: true, hz: 10 }); } catch (_) {}
+        // Ask for the stream ONLY if the dashboard is actually on screen.
+        // Push the DHT mask regardless: it is one frame and it makes the
+        // stream correct the moment it is switched on.
+        telemetryOn = false;
+        telemetryWanted = true;
+        applyTelemetry();
         sendDhtEnableMask();
         pollWaitingState();
         dispatchConnect();

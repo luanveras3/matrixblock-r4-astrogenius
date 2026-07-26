@@ -76,9 +76,7 @@
             reboot:      'Restart hub',
             start:       'Start program',
             radioOff:    'Turn WiFi off',
-            radioWarn:   'The robot stops using WiFi until you turn it off and on again. It saves battery and satisfies competition rules that forbid radios during a run.
-
-You can still reach it with the USB cable. Continue?',
+            radioWarn:   'The robot stops using WiFi until you turn it off and on again. It saves battery and satisfies competition rules that forbid radios during a run.\n\nYou can still reach it with the USB cable. Continue?',
             radioOffOk:  'WiFi off. Reach the robot with the USB cable, or restart it to bring WiFi back.',
             radioIsOff:  'WiFi is off on this robot (until it restarts).',
             nameHint:    'Also becomes the robot\'s WiFi name, as <name>-%s, from the next restart.',
@@ -138,9 +136,7 @@ You can still reach it with the USB cable. Continue?',
             reboot:      'Reiniciar hub',
             start:       'Iniciar programa',
             radioOff:    'Desligar o WiFi',
-            radioWarn:   'O robô para de usar WiFi até você desligar e ligar ele de novo. Economiza bateria e atende às regras de competição que proíbem rádio durante a rodada.
-
-Você ainda alcança ele pelo cabo USB. Continuar?',
+            radioWarn:   'O robô para de usar WiFi até você desligar e ligar ele de novo. Economiza bateria e atende às regras de competição que proíbem rádio durante a rodada.\n\nVocê ainda alcança ele pelo cabo USB. Continuar?',
             radioOffOk:  'WiFi desligado. Use o cabo USB para falar com o robô, ou reinicie para voltar o WiFi.',
             radioIsOff:  'O WiFi deste robô está desligado (até ele reiniciar).',
             nameHint:    'Também vira o nome do WiFi do robô, como <nome>-%s, a partir do próximo reinício.',
