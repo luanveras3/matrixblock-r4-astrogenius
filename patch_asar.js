@@ -40,6 +40,9 @@ const PATCHES = [
   ['blockly-core/connection.js',                      'blockly-core/connection.js'],
   // Groups this fork's navbar buttons into one dropdown (the stock bar is
   // fixed-width and we overflowed it).
+  // Single source of truth for "which version am I running": the fork's own
+  // version and channel, plus the upstream release it is built on.
+  ['blockly-core/version.js',                         'blockly-core/version.js'],
   ['blockly-core/navmenu.js',                         'blockly-core/navmenu.js'],
   // Hub configuration over the USB cable — the path that does not depend on
   // the network being configured.

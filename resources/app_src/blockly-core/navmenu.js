@@ -107,19 +107,45 @@
         return true;
     }
 
+    // A footer naming both versions. The dropdown is where someone looks when
+    // they are about to ask "which version is this?", and it is the one place
+    // that can carry the sentence without crowding the navbar.
+    function ensureFooter() {
+        if (!panelEl || !window.MBR4Version) return;
+        let f = panelEl.querySelector('.astro-nav-footer');
+        if (!f) {
+            f = document.createElement('div');
+            f.className = 'astro-nav-footer';
+            f.style.cssText =
+                'margin-top:6px;padding:6px 8px 2px;border-top:1px solid #e6eaee;' +
+                'font-size:11px;line-height:1.35;color:#7a8592;';
+            panelEl.appendChild(f);
+        }
+        f.textContent = 'AstroGenius ' + window.MBR4Version.short() + ' · ' +
+                        window.MBR4Version.baseLine();
+        f.title = window.MBR4Version.tooltip();
+        // Always last, however many buttons arrive after it.
+        panelEl.appendChild(f);
+    }
+
     function sweep() {
         if (!ensureMenu()) return;
         let moved = 0;
         for (const e of OURS) if (adopt(e)) moved++;
         if (moved) console.log('[NavMenu] grouped ' + moved + ' button(s)');
+        ensureFooter();
         // Hide the menu itself while it holds nothing, so a build without our
-        // buttons does not grow an empty control.
-        menuEl.style.display = panelEl.children.length ? '' : 'none';
+        // buttons does not grow an empty control. The footer is not a button,
+        // so it must not count towards "holds something".
+        const buttons = panelEl.querySelectorAll(':scope > :not(.astro-nav-footer)').length;
+        menuEl.style.display = buttons ? '' : 'none';
     }
 
     window.MBR4NavMenu = {
         _sweep: sweep,
-        _count: () => (panelEl ? panelEl.children.length : 0),
+        _count: () => (panelEl
+            ? panelEl.querySelectorAll(':scope > :not(.astro-nav-footer)').length
+            : 0),
     };
 
     // Every module installs its button on its own retry schedule, so keep

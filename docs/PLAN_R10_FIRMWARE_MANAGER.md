@@ -128,3 +128,51 @@ official app does there; it is not a regression this fork introduces.
 The panel shows the four versions correctly; the user updates the usb-bridge
 and the MMLower from the app without external tools; every failure path leaves
 recovery instructions on screen.
+
+---
+
+## 7. Version identity — and the app channel
+
+**Shipped 2026-07-26.** `blockly-core/version.js` is the single source of truth
+for "which version am I running", and it deliberately names *two*:
+
+- **MATRIXblock Mini R4 v1.0.8** — MATRIX Robotics' released product. Stable.
+  Read live from the archive's `package.json`, so an upstream bump shows up on
+  its own rather than going stale in a constant.
+- **AstroGenius Edition v3.5.0 BETA** — this fork. A community build.
+
+It appears as a chip in the navbar badge, as a footer line in the AstroGenius
+dropdown, and as a tooltip on the brand block that spells out the relationship
+in full.
+
+The BETA marking is not modesty. Two concrete failure modes it prevents:
+
+1. **Misrouted bug reports.** A teacher hitting a problem in code we wrote
+   should not open a ticket with MATRIX. The tooltip says so in as many words,
+   in both languages.
+2. **Support with no version.** "It doesn't work" is unanswerable without
+   knowing the fork build *and* the base it sits on. Now both are one hover
+   away, and the dropdown carries them where someone already looks.
+
+### The open piece — switching channels from inside the app
+
+The natural next step, and the reason this sits in the R10 document: let the
+user move between **stable** (pristine upstream) and **BETA** (this fork)
+without following a rollback procedure by hand.
+
+Mechanically this is already solved on disk. Rolling back is one file copy —
+`app.asar.bak` over `app.asar` — and since v3.4.1 it needs nothing else,
+because the fork stopped writing to pristine's `lang` key. The missing part is
+purely the plumbing:
+
+- Windows locks `app.asar` while the app runs, so the swap cannot happen
+  in-process. It needs **quit → swap → relaunch**, driven by a small helper or
+  by the main process on exit.
+- A fast-install user may not have kept `app.asar.bak`. The switch has to check
+  for it and, if absent, say so rather than leaving a half-swapped install.
+- Going back to BETA is the same copy in reverse, so both directions want the
+  pristine archive kept permanently, not treated as a temporary backup.
+
+Worth doing: for a classroom, "put it back the way it was" in one click — with
+the fork one click away again — is the difference between trying a beta and not
+risking it. Not release-blocking.
