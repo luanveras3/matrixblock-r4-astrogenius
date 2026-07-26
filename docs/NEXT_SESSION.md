@@ -199,6 +199,31 @@ counterpart.
   hub) and the BTN_UP rescue of a deliberately-blocking sketch — note that
   item 1 above now gives us the perfect blocking sketch for it.
 
+## 4z. MXColorV3 fixed — it was underexposed, not miscalibrated
+
+The colour sensor answered on I2C, `begin()` returned true, and every channel
+read 0 with `getColorID()` returning -1. Cause: `begin()` powered the chip and
+enabled the ADC but never wrote **integration time or gain**, so the TCS34725
+kept its post-reset defaults (minimum integration, 1x gain). In room light the
+clear channel then falls under the `if (c < 20) return 0` floor inside
+getR/getG/getB — so the driver reports "no light" while looking perfectly
+healthy.
+
+The giveaway: `TCS34725_ATIME` and `TCS34725_CONTROL` were defined in the
+header and written nowhere. A constant that is defined and never used is
+usually a forgotten step.
+
+Fix in `MiniR4_MXColorV3.cpp::begin()`: write ATIME (50 ms) and gain (4x)
+before enabling the ADC, plus a 60 ms wait so the first conversion is valid.
+Measured on hardware, same sensor and lighting: R/G/B 0/0/0 and ID -1 became
+**63/111/115 and ID 3 (blue)** — internally consistent, B >= G >> R.
+
+This is a change to the **vendor driver**, not our code, so it is now tracked
+in the repo (`.gitignore` whitelists just this file) — otherwise a clean
+install silently reintroduces it. It very likely also explains the older
+"MXColorV3 mislabels colours" note: a starved signal classifies badly.
+Worth including in the batched report to MATRIX Robotics.
+
 ## 4a. Port sensors — confirmed on real hardware 2026-07-25
 
 Sampled the running VM while the bench was operated by hand: switch on D1

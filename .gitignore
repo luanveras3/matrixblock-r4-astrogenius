@@ -59,6 +59,12 @@ arduino/libraries/MatrixMiniR4/src/Modules/*
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4WiFiRuntime.cpp
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4VM.h
 !arduino/libraries/MatrixMiniR4/src/Modules/MiniR4VM.cpp
+# Vendor driver fix: MXColorV3 never configured integration time or gain, so
+# the sensor answered on I2C and returned zeros for every colour. Tracked so a
+# clean install does not silently reintroduce it.
+!arduino/libraries/MatrixMiniR4/src/Modules/Sensors/
+arduino/libraries/MatrixMiniR4/src/Modules/Sensors/*
+!arduino/libraries/MatrixMiniR4/src/Modules/Sensors/MiniR4_MXColorV3.cpp
 !arduino/libraries/MatrixMiniR4/examples/
 arduino/libraries/MatrixMiniR4/examples/*
 !arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/
