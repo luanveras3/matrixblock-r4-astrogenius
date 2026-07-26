@@ -1,145 +1,211 @@
-# MATRIXblock Mini R4 — AstroGenius Fork
+# MATRIXblock Mini R4 — AstroGenius Edition
 
-Community-maintained fork of MATRIXblock Mini R4 v1.0.8 with quality-of-life
-improvements targeted at classroom use, developed by the AstroGenius Team
-(a Brazilian robotics team, maintainer: Luan Veras).
+Community fork of **MATRIXblock Mini R4 v1.0.8**, built for classroom use by
+the AstroGenius Team (a Brazilian robotics team; maintainer: Luan Veras).
 
-Every change is applied surgically to the shipped `app.asar` (see
-[Rebuild strategy](#rebuild-strategy)) — the original binary is never
-modified in-place, and native modules (serialport, DFU) are left
-untouched in `app.asar.unpacked/`.
+**Send programs to the robot over WiFi.** No cable, no queue at the one laptop
+with the USB port, no waiting for a full compile to find out something was
+wrong. The robot appears in the app, you press send, and it runs.
 
-Latest stable git tag: **v3.2-stable**. Additional features on the
-default branch since that tag: C++ code mode, `.ino` export, and a
-fully bilingual runtime i18n layer (see [CHANGELOG.md](CHANGELOG.md)
-for the unreleased entries).
+> **This is a BETA of a community fork.** The official MATRIXblock Mini R4 from
+> MATRIX Robotics is the stable product, and it is what you should use if you
+> need something dependable today. Please report problems with the features
+> below **here**, not to MATRIX — they did not write this code. The app carries
+> a BETA badge and a Versions menu that switches back to the official build in
+> one click, so trying this costs you nothing permanent.
+
+Current release: **v4.0.0-beta**, built on upstream v1.0.8.
+Nothing is installed over the official app — every change is applied surgically
+to a copy of the shipped `app.asar`, and the original binary is never modified
+in place.
 
 ---
 
-## What was added
+## What it does
 
-### Portuguese (pt-BR) localization
-- Full `pt-BR` locale added to `blockly-core/msg/scratch_msgs.js`
-  (~300 keys)
-- `pt-BR` option appended to the language dropdown in the obfuscated
-  `app.compressed.js`
-- Block dropdown labels translated inside
-  `blockly-core/blocks/_mini.js` (Brake/Coast → Freio/Livre,
-  degrees/seconds → graus/segundos, colors, directions, etc.). Only
-  the display label is translated; the internal code (second element
-  of each `[label, code]` pair) is preserved intact, so the Arduino
-  code generator is unaffected.
-- All modal dialogs in `views/main.html` translated: My Block Builder,
-  About, Learning Resources (with all 6 example titles), Firmware
-  Update Utility
-- Terminology fix: "Motor CC" → "Motor DC" (8 occurrences), which is
-  the correct Portuguese term
-- Portuguese examples copied to `arduino/blocks_examples/pt-BR/`
+### Wireless upload (no cable)
 
-### Multi-tab editor
-- Each open project lives in a separate tab, rendered in a tab bar
-  between the nav and the workspace
-- Green (`#008184`) styling to match the app's identity
-- Active tab has a white underline; inactive tabs slightly transparent
-- Close button per tab; "+" button on the right to open a new tab
+The robot joins your network — or serves its own access point — announces
+itself, and the app finds it. Sending a program compiles it and pushes it over
+the air. A cable is still needed exactly once, to put this firmware on the
+robot the first time.
 
-### Auto-save + session recovery
-- Every 30 seconds, if the active tab has a file path bound to it,
-  the app triggers Save silently
-- On every save/open/close/`beforeunload`, the full session state is
-  persisted to `localStorage` (key `astro-session-v1`) — tab list,
-  active tab, per-tab XML, per-tab dirty flag
-- On launch, if a session from the last 24h exists AND has meaningful
-  content (unsaved changes OR real file paths), the user is offered a
-  restore prompt via SweetAlert2
+### A bytecode VM, for the fast loop
 
-### Unsaved-changes indicator
-- Yellow dot (●) appears in the tab name when the workspace has
-  changes since the last save
-- Dirty detection uses Blockly's `addChangeListener`, filtering out
-  UI-only events (viewport, selection, click, drag)
-- Closing a dirty tab prompts for confirmation
+A full compile-and-flash takes tens of seconds. For iterating on logic, the app
+can instead compile your blocks to a compact bytecode and send **that** — the
+robot runs it immediately, without reflashing. The program can be kept on the
+robot so it survives a power cycle.
 
-### "Open file" always opens in a new tab
-- Clicking File → Open (or `Ctrl+O`) creates a fresh tab with the
-  opened file, preserving the previously active tab untouched
-- The current tab's XML is snapshotted BEFORE the file dialog opens
-  (the app's own IPC listener runs before ours and would otherwise
-  replace the workspace before we could snapshot)
+### A remote console
 
-### C++ code mode (writable Monaco editor)
-- Toggle button `</> Code` in the tab bar (per-tab state).
-- When enabled, the Monaco C++ editor becomes writable and the block
-  workspace is visually locked (grayscale + `pointer-events: none`),
-  with a yellow banner across the top explaining the state.
-- Monaco's `setValue` is wrapped as a no-op while code mode is active
-  so Blockly's automatic code regeneration cannot clobber the user's
-  manual edits.
-- Compile and Upload transparently use the manually edited C++ —
-  the app's own compile method already reads directly from
-  `editor.getValue()`, so no IPC interception is needed.
-- Per-tab `codeMode` and `cppCode` are persisted in the session
-  snapshot; switching between tabs restores each one's mode.
-- Both directions surface a SweetAlert confirmation (enabling warns
-  about frozen blocks; disabling warns manual edits will be discarded).
+`print` blocks stream back to a Log tab in the app while the robot is running,
+across the room, with no cable attached. Rate-limited on the robot so a chatty
+loop cannot flood the link.
 
-### Export current sketch as .ino
-- New File-menu entry "Export as .ino" plus `Ctrl+E` shortcut.
-- Reads `editor.getValue()` from Monaco (works in both block mode
-  and code mode) and triggers a native save dialog via a hidden
-  `<a download>` element that Electron intercepts.
-- Suggested filename is derived from the active tab's path or name
-  (`Project.mbr4` → `Project.ino`), stripping the extension and
-  sanitizing non-word characters.
+### Live telemetry (HUD)
 
-### Keyboard shortcuts
-| Shortcut       | Action                              |
-| -------------- | ----------------------------------- |
-| `Ctrl+S`       | Save                                |
-| `Ctrl+Shift+S` | Save As                             |
-| `Ctrl+O`       | Open (into a new tab)               |
-| `Ctrl+T`       | New tab                             |
-| `Ctrl+W`       | Close active tab                    |
-| `Ctrl+E`       | Export current sketch as `.ino`     |
-| `Ctrl+Shift+N` | New project                         |
+Battery, uptime, motors, encoders and sensors, updating while the program runs.
+Telemetry is only requested while the HUD tab is actually visible, because on
+this hardware every outgoing frame costs a synchronous modem write.
 
-### Fully bilingual UI (English default + pt-BR overrides)
-- Every added user-facing string — tab bar, dialogs, banners,
-  modal HTML content, block dropdown labels — resolves against the
-  current locale at render time and falls back to English for any
-  missing key.
-- Three self-contained maps hold the translations
-  (`STRINGS`, `MODAL_STRINGS`, `astroLocales`); see
-  [Contributing another locale](#contributing-another-locale).
-- HTML defaults are English; pt-BR overrides are applied by an
-  early `applyModalStrings()` call so pt-BR users don't see an
-  English flash on start-up.
-- Language switches from the app's own dropdown are picked up live
-  via a delegated click listener — no reload needed.
+### Setup over the USB cable
+
+The path that does not depend on the network already working: name the robot,
+set WiFi credentials, switch the radio off for good, and read the hub's state —
+all over the cable, from a panel in the app. This exists because "I cannot find
+the hub" is not a problem you can fix over the network.
+
+### One connection surface
+
+USB and WiFi in a single panel, reached from the device indicator in the
+navbar, instead of five separate pickers.
+
+### Versions menu
+
+Lists the app builds installed side by side and switches between them: the app
+closes and reopens on the one you pick. **The switcher is injected into the
+build you switch to**, so the official app can switch back from inside itself.
+A `versions.json` next to `app.asar` adds more builds without a code change.
+
+Your projects are unaffected in either direction: this fork adds **no blocks**
+(143 block types before and after, and every serialized field value is
+identical), so a `.mbr4` saved in one version opens in the other.
+
+---
+
+## What v3.x added, and is still here
+
+- **Portuguese (pt-BR) localization** — the full Blockly locale, block dropdown
+  labels, and a bilingual runtime i18n layer. Only display labels are
+  translated; the generated Arduino code is untouched.
+- **Multi-tab editor** with per-tab state.
+- **Auto-save and session recovery.**
+- **Unsaved-changes indicator.**
+- **C++ code mode** — a writable Monaco editor.
+- **Export the current sketch as `.ino`.**
+- **Keyboard shortcuts.**
+
+See [CHANGELOG.md](CHANGELOG.md) for the detail on each.
+
+---
+
+## Install
+
+Two ways, both in [INSTALL.md](INSTALL.md):
+
+1. **Download the pre-patched `app.asar`** from the latest release and drop it
+   into the app's `resources/` directory. No Node, no build.
+2. **Build from source** — clone, run `node patch_asar.js`. Recommended if you
+   want to read or change anything first.
+
+Either way, **keep the original `app.asar`**. The Versions menu uses it to
+switch you back, and the rollback instructions depend on it.
+
+---
+
+## Going back to the official version
+
+One click, from the Versions menu — or a file copy, documented in
+[INSTALL.md](INSTALL.md#rolling-back).
+
+Worth knowing: **the robot keeps the AstroGenius firmware until the official
+app uploads to it.** Our firmware ships as library source, so it arrives with
+the first program a student sends, and it leaves the same way. And after going
+back, the robot's radio stays up until you power-cycle it — the WiFi module
+holds the access point across a reflash of the main MCU, so the robot can still
+appear online with nothing behind it. See
+[docs/POC_OTA_FINDINGS.md](docs/POC_OTA_FINDINGS.md).
+
+---
+
+## For MATRIX Robotics, or anyone reviewing this
+
+[docs/UPSTREAM_CHANGES.md](docs/UPSTREAM_CHANGES.md) is written for you: it
+lists every upstream file this fork touches, what changed in each, and where
+the reasoning lives. Almost everything here is new files; only five upstream
+files are modified, and one of those is a minified bundle we are happy to
+summarise on request.
+
+Three constraints measured on real hardware apply to the stock product too,
+and are written up in [docs/POC_OTA_FINDINGS.md](docs/POC_OTA_FINDINGS.md):
+the 23296-byte static RAM ceiling on UNOWIFIR4, the ~100 ms synchronous modem
+write per outgoing frame, and `control_wait_until` compiling to a bare
+`while(!cond);` that starves any cooperative runtime from the first statement
+of a typical student program.
+
+---
+
+## Tests
+
+```
+node tools/run_tests.js
+```
+
+7 headless suites, 151 assertions: the bytecode assembler, generator handlers,
+hardware handlers, procedures, the live-debug source map, the sketch wrapper,
+and the OTA binary packer. `node test_app.js` additionally launches the real
+app as a smoke test and needs a patched `app.asar` already installed.
 
 ---
 
 ## Repository layout
 
+The repository is a **whitelist-based delta**: it tracks only what this fork
+adds or changes, never the whole product. The pristine baseline is not here —
+it is the vendor's `app.asar`, fetched at build time.
+
 ```
-matrixblock-r4/
-├── README.md, CHANGELOG.md
+matrixblock-r4-astrogenius/
+├── README.md, CHANGELOG.md, INSTALL.md, RELEASE.md, ROADMAP.md
 ├── .gitignore                       # whitelist: only tracks changed files
 ├── patch_asar.js                    # surgical asar rebuilder
-├── test_app.js                      # Playwright smoke test
+├── test_app.js                      # Playwright smoke test (launches the app)
+├── probe_helpers.js                 # shared Electron-probe plumbing
+├── docs/
+│   ├── NEXT_SESSION.md              # start here if you are picking this up
+│   ├── UPSTREAM_CHANGES.md          # every upstream file we touch, and why
+│   ├── POC_OTA_FINDINGS.md          # hardware measurements, with numbers
+│   ├── BUG_BLOCKING_USERLOOP.md     # the one bug worth reading in full
+│   └── PLAN_R10_FIRMWARE_MANAGER.md
+├── tools/
+│   ├── hubctl.js                    # bench NDJSON client (discover/info/watch)
+│   ├── bin2ota.js                   # OTA binary packer
+│   ├── run_tests.js                 # runs every *.test.js below
+│   └── *.test.js                    # 7 headless suites, 151 assertions
 ├── resources/
 │   ├── app.asar                     # generated by patch_asar.js
-│   ├── app.asar.bak                 # original v1.0.8 asar (input)
+│   ├── app.asar.bak                 # original v1.0.8 asar (input, keep it)
 │   ├── app.asar.unpacked/           # native modules (untouched)
-│   └── app_src/                     # patched source files
-│       ├── app.compressed.js
-│       ├── blockly-core/
-│       │   ├── blocks/_mini.js
-│       │   └── msg/scratch_msgs.js
-│       └── views/main.html
+│   └── app_src/                     # patched + new source files
+│       ├── app.compressed.js        # upstream bundle, minified (5 edits)
+│       ├── views/main.html          # upstream, additions only
+│       └── blockly-core/
+│           ├── wifi_upload.js       # compile + OTA over the network
+│           ├── wifi_hud.js          # shared socket, telemetry, Start button
+│           ├── wifi_vm_upload.js    # bytecode path (the fast loop)
+│           ├── wifi_vm_debug.js     # live block debug (UI withdrawn)
+│           ├── connection.js        # unified USB + WiFi panel
+│           ├── usb_config.js        # hub setup over the cable
+│           ├── versions.js          # side-by-side builds, one-click switch
+│           ├── version.js           # single source of truth for versions
+│           ├── navmenu.js           # groups this fork's navbar buttons
+│           ├── bytecode.js          # assembler + live-debug source map
+│           ├── generator_bytecode/  # blocks -> bytecode
+│           ├── arduino_wifi_wrapper.js  # sketch rewriting (see below)
+│           ├── blocks/_mini.js      # upstream, dropdown labels only
+│           └── msg/scratch_msgs.js  # upstream, keys appended
 └── arduino/
+    ├── libraries/MatrixMiniR4/src/Modules/
+    │   ├── MiniR4WiFiRuntime.{h,cpp}  # discovery, NDJSON, telemetry, OTA
+    │   └── MiniR4VM.{h,cpp}           # the bytecode VM
     └── blocks_examples/pt-BR/       # translated examples
 ```
+
+`arduino_wifi_wrapper.js` earns its name: it rewrites the generated sketch so
+`delay` yields to the runtime, `Serial.print` reaches the remote console, and a
+blocking start-gate loop becomes `WiFiRuntime.waitForStart()`. That last one is
+not cosmetic — see [docs/BUG_BLOCKING_USERLOOP.md](docs/BUG_BLOCKING_USERLOOP.md).
 
 ---
 

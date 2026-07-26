@@ -6,9 +6,60 @@ Based on upstream v1.0.8. Format loosely inspired by
 
 ---
 
-## [Unreleased — feature/wifi-tcp-ota] — 2026-07-25
+## [v4.0.0-beta] — 2026-07-26
 
-### Added
+The wireless release. Everything below runs over WiFi and needs no cable, and
+none of it existed in v3.x — hence the major bump rather than a 3.5.
+
+**This is a BETA of a community fork.** The app labels itself so, and the
+official MATRIXblock Mini R4 v1.0.8 from MATRIX Robotics remains the stable
+product. Problems with the features listed here belong to this fork, not to
+MATRIX. A Versions menu switches between the two builds in one click.
+
+### Added — version management
+- **Versions menu**, in the same dropdown as Update FW. Lists the builds
+  installed side by side and switches between them: the app closes and reopens
+  on the one you pick. The switcher is injected into the target build, so the
+  official app can switch back from inside itself. A `versions.json` next to
+  `app.asar` adds more builds with no code change — `file` is the only required
+  field, and the version number is read out of the archive so a label cannot
+  disagree with what is installed.
+- **Version identity in the navbar.** Names both the fork's own version and the
+  upstream release it is built on (read from the archive at runtime, so an
+  upstream bump reports itself), and marks this build BETA.
+- **OTA is refused early when it cannot work.** The hub reports its ESP32-S3
+  firmware version, and an upload below 0.5.0 now fails in about a second with
+  a message naming the version found and the one required — instead of dying
+  inside `OTAUpdate` after a full compile.
+
+### Withdrawn
+- **Live block debug is no longer in the menus.** The machinery is intact and
+  reachable from the console (`window.MBR4VMDebug._install()`), because the
+  problem is the experience rather than the protocol. Everything else below is
+  unchanged.
+
+### Fixed
+- **The USB lamp said "no cable" with the cable plugged in.** It was reporting
+  whether our serial link was open, and that link is released whenever the
+  connection panel closes so it never blocks an upload — meaning the normal,
+  healthy state rendered as unplugged. Cable presence and link state are now
+  separate.
+
+### Test coverage
+- The four VM bytecode suites from the retired BLE branch (assembler, generator
+  handlers, hardware handlers, procedures) were ported and pass unmodified,
+  which also confirms the bytecode layer survived the BLE→WiFi migration
+  without regressing. `node tools/run_tests.js` — 7 suites, 151 assertions.
+
+### Known behaviour, worth reading before reporting it
+- **Going back to the official build does not turn the radio off.** The
+  ESP32-S3 keeps the access point up across a reflash of the main MCU, so the
+  robot still appears in the WiFi list, still answers a ping, and port 47802
+  still accepts a connection — with nothing behind any of it, and the radio
+  still drawing current. Only a full power cycle brings it down. The switch
+  dialog says so, and `docs/POC_OTA_FINDINGS.md` has the measurements.
+
+### Added — earlier in this cycle
 - **Live block debug (R2, the differentiator).** With a VM program running,
   the IDE follows execution *in the workspace*: the block the robot is
   currently executing glows, and a debug panel offers pause / resume /

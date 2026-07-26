@@ -21,7 +21,7 @@
 
     // The fork's own version. Bump this in the same commit that moves the git
     // tag, and keep CHANGELOG.md in step.
-    const FORK = '3.5.0';
+    const FORK = '4.0.0';
 
     // 'beta' while the WiFi/OTA work is being validated in the field.
     // Set to 'stable' only once a release has survived real classroom use.
@@ -91,7 +91,7 @@
         base:    BASE,
         isBeta:  CHANNEL === 'beta',
 
-        /** "3.5.0 BETA" — for a compact chip. */
+        /** "4.0.0 BETA" — for a compact chip. */
         short()   { return FORK + ' ' + channelLabel(); },
         /** "on MATRIXblock 1.0.8" — the second line under a chip. */
         baseLine() { return fmt(tr('baseLine'), BASE); },
