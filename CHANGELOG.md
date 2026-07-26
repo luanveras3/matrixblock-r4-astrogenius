@@ -58,6 +58,20 @@ Based on upstream v1.0.8. Format loosely inspired by
   - Low-battery warning: a weak pack makes WiFi unreliable while USB keeps
     working, which reads as a broken robot.
 
+- **"Press to start" is now a first-class runtime concept, and can be started
+  from the app.** `WiFiRuntime.waitForStart()` replaces the raw
+  `while (!BTN_UP);` gate that opens practically every student program. While
+  parked it keeps the robot fully reachable — so the state a robot spends
+  most of its idle life in became the state it is easiest to upload to — and
+  it releases on BTN_UP *or* on `{"t":"start"}` from the IDE. The HUD grows a
+  green **Start** button whenever a connected robot reports it is waiting, so
+  a teacher can start a robot without walking over to it; that is the
+  groundwork for the classroom panel (roadmap R7). The runtime reports
+  `"waiting"` in `info`, and deliberately does not draw on the OLED — the
+  student's own blocks have usually just drawn their prompt there.
+  *Currently reachable from hand-written sketches; wiring it to a block is
+  tracked in `docs/NEXT_SESSION.md`.*
+
 ### Fixed
 - **Prints inside a loop no longer flood the radio.** Every log frame is a
   synchronous ~100 ms modem write — the same budget telemetry spends — so a

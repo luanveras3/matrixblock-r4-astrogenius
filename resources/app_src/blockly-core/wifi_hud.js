@@ -41,7 +41,10 @@
             // Top tab bar
             hudTabCode:      'Code',
             hudTabHud:       'HUD',
-            hudTabLog:       'Log',
+                        hudTabLog:       'Log',
+            hudStart:        'Start',
+            hudStartTitle:   'Start the program on this robot (it is waiting for BTN_UP)',
+            hudStartSent:    'Start sent.',
             // Sub-tabs
             sbSubTabState:   'State',
             sbSubTabPorts:   'Ports',
@@ -93,7 +96,10 @@
         'pt-BR': {
             hudTabCode:      'Código',
             hudTabHud:       'HUD',
-            hudTabLog:       'Log',
+                        hudTabLog:       'Log',
+            hudStart:        'Iniciar',
+            hudStartTitle:   'Iniciar o programa neste robô (ele está esperando o BTN_UP)',
+            hudStartSent:    'Comando de início enviado.',
             sbSubTabState:   'Estado',
             sbSubTabPorts:   'Portas',
             sbSectionConn:   'Conexão',
@@ -225,7 +231,25 @@
 
     // --- HUD DOM state -------------------------------------------------------
     let hudMounted = false;
-    let codeTab = null, hudTab = null, logTab = null;
+    let codeTab = null, hudTab = null, logTab = null, startBtn = null;
+
+    // The robot only tells us it is waiting in an `info` reply, so ask
+    // periodically while connected. Cheap (one small frame) and it is what
+    // makes the Start button appear exactly when it is useful.
+    function pollWaitingState() {
+        if (window.MBR4Hud && window.MBR4Hud.isConnected()) {
+            window.MBR4Hud.send({ t: 'info' });
+        }
+    }
+    // A robot can enter the gate long after it connected — most programs loop
+    // back to it every round — so poll rather than relying on the connect-time
+    // reply. 3 s is well under the modem budget and keeps the button honest.
+    setInterval(pollWaitingState, 3000);
+
+    function setWaiting(waiting) {
+        if (!startBtn) return;
+        startBtn.style.display = waiting ? 'block' : 'none';
+    }
     let codeDiv = null, hudDiv = null, logDiv = null;
     let activePane = 'code';
     let hudConnected = false;
@@ -560,6 +584,28 @@
         tabBar.appendChild(codeTab);
         tabBar.appendChild(hudTab);
         tabBar.appendChild(logTab);
+
+        // Start button — releases a robot parked in WiFiRuntime.waitForStart().
+        // Lives in the tab bar because this is the surface that is connected
+        // while a robot is actually running, and because the point of it is a
+        // teacher starting a room without walking it pressing buttons.
+        // It appears only when a robot reports that it is waiting, so it can
+        // never look like a control that does nothing.
+        startBtn = document.createElement('button');
+        startBtn.id = 'wifiHudStart';
+        startBtn.type = 'button';
+        startBtn.textContent = tr('hudStart');
+        startBtn.title = tr('hudStartTitle');
+        startBtn.style.cssText =
+            'display:none;margin-left:auto;align-self:center;margin-right:6px;' +
+            'padding:2px 12px;border:0;border-radius:4px;background:#22c55e;' +
+            'color:#fff;font:600 12px/1.6 inherit;cursor:pointer;';
+        startBtn.addEventListener('click', () => {
+            if (window.MBR4Hud.send({ t: 'start' })) {
+                log(tr('hudStartSent'), 'ok');
+            }
+        });
+        tabBar.appendChild(startBtn);
 
         hudDiv = document.createElement('div');
         hudDiv.id = 'wifiHudPane';
@@ -1229,12 +1275,15 @@
                 // Log tab with a leading '>' marker so they're visually
                 // distinct from our own [HUD] status lines.
                 appendLogLine({ msg: '> ' + o.s, kind: 'robot', ts: Date.now() });
+            } else if (o.t === 'info') {
+                setWaiting(o.waiting === true);
             }
             dispatchFrame(o);
         };
         // Ask for the stream + push initial DHT mask (opt-in ports only).
         try { client.send({ t: 'telemetry', on: true, hz: 10 }); } catch (_) {}
         sendDhtEnableMask();
+        pollWaitingState();
         dispatchConnect();
     }
 

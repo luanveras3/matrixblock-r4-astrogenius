@@ -20,9 +20,22 @@ was done and the acceptance results. What remains from the original list:
       wrapper now catches it, so this is no longer urgent, but the generator
       still emits a bare `while(!cond);` which is wrong on its own terms and
       would bite anyone using the generated code outside the wrapper.
-- [ ] **Consider `waitForStart()`** (item A2 in the bug doc) — the gate is
-      near-universal, so making it a first-class concept buys an OLED
-      "waiting" state, a remote Start from the IDE, and groundwork for R7.
+- [x] **`waitForStart()`** — done 2026-07-25. `WiFiRuntime.waitForStart()`
+      parks on tick() (so the robot is fully reachable exactly when someone
+      wants to upload to it), releases on BTN_UP **or** a remote
+      `{"t":"start"}`, waits for the button to be released so the same press
+      is not consumed twice, and reports `"waiting"` in `info`. The HUD shows
+      a green **Start** button whenever a connected robot reports it is
+      waiting — one click starts it without walking over to the robot, which
+      is the groundwork for the R7 teacher panel.
+      Deliberately does not draw on the OLED: the student's blocks have
+      usually just drawn their own prompt there.
+- [ ] **Wire `waitForStart()` to a block.** It is a runtime API today, so
+      only hand-written sketches reach it. The natural follow-up is either a
+      dedicated "wait to start" block or teaching the generator to emit it
+      for the canonical `wait until <BTN_UP pressed>` shape. Until then the
+      wrapper's loop rewrite keeps the raw gate safe, just not remotely
+      startable.
 
 <details>
 <summary>Original entry (kept for context)</summary>

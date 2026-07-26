@@ -123,6 +123,33 @@ public:
     bool tick(bool cond = true);
 
     /**
+     * @brief Park until the run is started, keeping the robot fully reachable.
+     *
+     * Replaces the `while (!BTN_UP);` gate that opens practically every
+     * student program. Two things it does that the raw loop cannot:
+     *
+     *  - it stays responsive (it is built on tick()), so the state a robot
+     *    spends most of its idle life in becomes the state it is *easiest*
+     *    to reach — which is exactly when someone wants to upload to it;
+     *  - it can be released remotely with `{"t":"start"}`, so a teacher can
+     *    start a whole classroom from the IDE instead of walking the room
+     *    pressing buttons.
+     *
+     * Returns when BTN_UP is pressed or a remote start arrives, and waits
+     * for the button to be released before returning so the press cannot
+     * also be seen by whatever the program reads next.
+     *
+     * Deliberately does not touch the OLED: the student's own blocks have
+     * usually just drawn their prompt there, and overwriting it would be
+     * rude. The waiting state is reported in `info` instead, which is what
+     * the IDE needs to explain a robot that "isn't doing anything".
+     */
+    void waitForStart();
+
+    /** @return true while parked in waitForStart(). */
+    bool isWaitingToStart() const { return _waitingStart; }
+
+    /**
      * @brief Push a log line to the connected IDE (R3 — remote console).
      *
      * NDJSON frame `{"t":"log","s":"..."}` — appears in the HUD's Log tab.
@@ -292,6 +319,8 @@ private:
     bool     _apPassCustom;        ///< a user-set AP password exists in flash
     uint32_t _lastStaRetryMs;
     uint32_t _tickLastMs;          ///< throttle for tick()
+    bool     _waitingStart;        ///< parked in waitForStart()
+    bool     _startRequested;      ///< a remote {"t":"start"} arrived
 
     // TCP line assembly (commands are small and flat; no ArduinoJson).
     char     _lineBuf[192];

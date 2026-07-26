@@ -298,6 +298,8 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _nameCustom(false)
     , _lastStaRetryMs(0)
     , _tickLastMs(0)
+    , _waitingStart(false)
+    , _startRequested(false)
     , _lineLen(0)
     , _serialLen(0)
     , _replyToSerial(false)
@@ -759,6 +761,29 @@ bool MiniR4WiFiRuntimeClass::tick(bool cond)
     // the depth here is bounded at one.
     _pollVm();
     return cond;
+}
+
+void MiniR4WiFiRuntimeClass::waitForStart()
+{
+    _waitingStart   = true;
+    _startRequested = false;
+    log("Waiting for start (BTN_UP, or Start in the IDE)");
+
+    while (!_startRequested && !MiniR4.BTN_UP.getState()) {
+        tick();
+    }
+
+    const bool remote = _startRequested;
+    _waitingStart   = false;
+    _startRequested = false;
+
+    // Wait for the button to come back up, so the same press is not also
+    // consumed by whatever the program reads next — students routinely
+    // follow the gate with another button check, and a 200 ms human press
+    // would otherwise satisfy both.
+    while (MiniR4.BTN_UP.getState()) tick();
+
+    log(remote ? "Started (remote)" : "Started (BTN_UP)");
 }
 
 void MiniR4WiFiRuntimeClass::safeDelay(uint32_t ms)
@@ -1291,10 +1316,12 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         jsonEscape(_apSsid, apNowEsc, sizeof(apNowEsc));
         _sendJson("{\"t\":\"info\",\"name\":\"%s\",\"mac\":\"%s\",\"fw\":\"%s\","
                   "\"ip\":\"%u.%u.%u.%u\",\"mode\":\"%s\",\"ssid\":\"%s\","
-                  "\"ap\":\"%s\",\"batt\":%d.%02d,\"uptime\":%lu}",
+                  "\"ap\":\"%s\",\"waiting\":%s,"
+                  "\"batt\":%d.%02d,\"uptime\":%lu}",
                   nameEsc, _mac4, MINIR4_WIFI_RUNTIME_VERSION,
                   ip[0], ip[1], ip[2], ip[3],
                   _netMode == NET_AP ? "ap" : "sta", ssidEsc, apNowEsc,
+                  _waitingStart ? "true" : "false",
                   (int)MiniR4.PWR.getBattVoltage(),
                   (int)(MiniR4.PWR.getBattVoltage() * 100) % 100,
                   (unsigned long)millis());
@@ -1373,6 +1400,15 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         else                g_client.flush();
         delay(150);   // let the ack leave the modem / UART
         NVIC_SystemReset();
+
+    } else if (!strcmp(type, "start")) {
+        // Releases waitForStart(). Acked with whether the robot was actually
+        // parked, so a teacher starting a whole class can tell which robots
+        // were waiting and which were already running.
+        const bool wasWaiting = _waitingStart;
+        _startRequested = true;
+        _sendJson("{\"t\":\"ack\",\"cmd\":\"start\",\"ok\":true,\"waiting\":%s}",
+                  wasWaiting ? "true" : "false");
 
     } else if (!strcmp(type, "echo")) {
         // R3 helper: server logs whatever string the client passed.

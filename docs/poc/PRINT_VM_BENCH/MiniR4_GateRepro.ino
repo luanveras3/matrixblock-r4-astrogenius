@@ -1,23 +1,15 @@
 /*
-  Acceptance test for the blocking-loop fix.
+  Acceptance test for waitForStart() — the "press to start" gate that opens
+  practically every student program, made reachable and remotely startable.
 
-  This is the user's reported reproduction, written exactly as
-  arduino_wifi_wrapper.js now emits it: the "wait until BTN_UP is pressed"
-  gate that opens practically every student program, with its condition
-  wrapped in WiFiRuntime.tick().
-
-  Before the fix this sketch made the hub invisible on WiFi AND on USB from
-  the moment it booted. The hub must now stay fully discoverable while parked
-  on the gate, with no button ever pressed.
+  The robot must stay fully discoverable while parked here, and must start
+  either from BTN_UP or from {"t":"start"} sent by the IDE.
 */
 #include <MatrixMiniR4.h>
 #include "Modules/MiniR4WiFiRuntime.h"
 #define MINIR4_SKETCH_ID ((uint32_t)0x51A7E01Du)
 
-static void userSetup()
-{
-    Serial.begin(9600);
-}
+static void userSetup() { }
 
 static void userLoop()
 {
@@ -25,15 +17,19 @@ static void userLoop()
     MiniR4.OLED.setCursor(10, 10);
     MiniR4.OLED.print("PRESS UP");
     MiniR4.OLED.display();
-    while(WiFiRuntime.tick(!MiniR4.BTN_UP.getState()));
+
+    WiFiRuntime.waitForStart();
+
     MiniR4.OLED.clearDisplay();
     MiniR4.OLED.setCursor(10, 10);
     MiniR4.OLED.print("RUNNING");
     MiniR4.OLED.display();
-    while(WiFiRuntime.tick(!MiniR4.BTN_DOWN.getState()))
+
+    // Run until BTN_DOWN, then go back to the gate.
+    while (WiFiRuntime.tick(!MiniR4.BTN_DOWN.getState()))
     {
         WiFiRuntime.logPrintln("running");
-        WiFiRuntime.safeDelay(500);
+        WiFiRuntime.safeDelay(1000);
     }
 }
 
