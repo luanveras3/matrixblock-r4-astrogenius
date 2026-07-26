@@ -72,7 +72,10 @@
             close:     'Close',
             unsaved:   'Save your work first — the app will close without asking again.',
             confirm:   'Switch to %1?',
-            confirmB:  'The app will close now and reopen on %1 v%2.\n\nAnything unsaved will be lost.',
+            confirmB:   'The app will close now and reopen on %1 v%2.',
+            unsavedWarn:'Anything not saved will be lost.',
+            powerTitle: 'Then power-cycle the robot',
+            powerBody:  'Send a program from the new version, then switch the robot off and on at the power switch. Its WiFi module keeps the network up across a reflash — until a full power cycle the robot can still look online and answer a ping with nothing behind it, and the radio goes on draining the battery.',
             go:        'Close and switch',
             cancel:    'Cancel',
             failed:    'Could not switch: %1',
@@ -96,7 +99,10 @@
             close:     'Fechar',
             unsaved:   'Salve seu trabalho antes — o app vai fechar sem perguntar de novo.',
             confirm:   'Trocar para %1?',
-            confirmB:  'O app vai fechar agora e reabrir na %1 v%2.\n\nO que não estiver salvo será perdido.',
+            confirmB:   'O app vai fechar agora e reabrir na %1 v%2.',
+            unsavedWarn:'O que não estiver salvo será perdido.',
+            powerTitle: 'Depois, desligue e ligue o robô',
+            powerBody:  'Envie um programa pela nova versão e então desligue e ligue o robô na chave. O módulo WiFi dele mantém a rede no ar através da regravação — até um ciclo de energia completo o robô pode continuar parecendo online e respondendo ping sem nada por trás, e o rádio segue gastando bateria.',
             go:        'Fechar e trocar',
             cancel:    'Cancelar',
             failed:    'Não consegui trocar: %1',
@@ -565,7 +571,21 @@
         const ok = await (window.Swal
             ? window.Swal.fire({
                 title: fmt(tr('confirm'), row.name),
-                text: fmt(tr('confirmB'), row.name, row.version),
+                // html, not text: SweetAlert renders with white-space:normal,
+                // so newlines collapse and the power-cycle instruction ends up
+                // buried mid-paragraph in a wall of prose. It is the one line
+                // here that someone has to act on, so it gets its own block.
+                html:
+                    '<p style="margin:0 0 10px;">' +
+                        esc(fmt(tr('confirmB'), row.name, row.version)) + '</p>' +
+                    '<p style="margin:0 0 14px;color:#b45309;">' +
+                        esc(tr('unsavedWarn')) + '</p>' +
+                    '<div style="text-align:left;background:#f1f5f9;border-left:3px solid #0f766e;' +
+                        'border-radius:4px;padding:10px 12px;font-size:13.5px;line-height:1.5;">' +
+                        '<div style="font-weight:700;margin-bottom:4px;">' +
+                            esc(tr('powerTitle')) + '</div>' +
+                        '<div style="color:#475569;">' + esc(tr('powerBody')) + '</div>' +
+                    '</div>',
                 icon: 'warning', showCancelButton: true,
                 confirmButtonText: tr('go'), cancelButtonText: tr('cancel'),
               }).then((r) => r && r.isConfirmed)
