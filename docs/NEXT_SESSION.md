@@ -105,7 +105,7 @@ Telemetry is also gated on the dashboard being visible (measured 0 / 45 / 0
 frames per 5 s: hidden, open, left). Between the two, the radio now works only
 when someone is actually using it.
 
-## 3c. OTA over the shared socket — still not validated; the two blocking bugs are FIXED
+## 3c. OTA over the shared socket — ✅ VALIDATED 2026-07-25 (manually, from the button)
 
 Attempted 2026-07-25, did not complete. Record so the next attempt starts
 informed rather than repeating it:
@@ -132,6 +132,14 @@ informed rather than repeating it:
    peer. Worth a `_pollCommands` review: drop `g_client` on a stale/half-open
    socket (idle timeout or write failure) so one crashed client cannot take
    the robot off the network.
+
+**Confirmed working.** After both fixes, a real "Send via WiFi" run from the
+button succeeded end to end — so the shared-socket conversion is good: an OTA
+now uploads over the same connection the HUD holds, with no pause/resume and
+no second client. That closes the last open item of the unified-connection
+work.
+
+History of the two failed probe attempts, kept for the method lesson:
 
 **Attempt 2 (after both fixes) got much further and still did not close.**
 The pipeline worked: compiled 155000 B, converted to a 121862 B .ota,
