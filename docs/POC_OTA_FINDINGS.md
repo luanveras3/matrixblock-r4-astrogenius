@@ -442,6 +442,32 @@ be reporting the *previous* firmware's setup.
    is expected, not a bug, and not our firmware still running. Port 47802 even
    accepting a connection makes it look alive; nothing answers on it.
 2. **The radio keeps drawing current** after the switch, until the modem is
-   actually powered down. A power cycle should clear it — resetting the RA4M1
-   will not, since that is not what is holding the AP up. Worth remembering
-   whenever battery life is being measured.
+   actually powered down. Resetting the RA4M1 will not do it — that is not what
+   is holding the AP up. Worth remembering whenever battery life is measured:
+   a current reading taken right after going back to the official build still
+   includes a radio that nothing is using.
+
+### The power cycle, measured
+
+Confirmed on the bench. After switching the hub off and on with the stock
+sketch loaded:
+
+| Check | Result |
+|---|---|
+| ICMP to 192.168.4.1 | no reply |
+| PC association | dropped, and would not re-establish |
+| `netsh wlan connect Uni11-B0BC` | command accepted, **association failed** |
+| `netsh wlan show networks` | **still lists `Uni11-B0BC`** |
+
+So the power cycle does bring the radio down, and only the power cycle does.
+
+**The scan list is not evidence.** Windows kept reporting the SSID for minutes
+after the access point stopped transmitting — it serves a cached BSS list, and
+a saved profile seems to keep the entry alive longer. Reading that list as
+"the AP is still up" would have inverted the conclusion. What settles it is an
+association attempt: you cannot associate with an access point that is not
+transmitting. Ping is nearly as good and much cheaper.
+
+Same lesson as the rest of this file, in a new costume: prefer the measurement
+that requires the other end to actively participate over the one that can be
+served from a cache.
