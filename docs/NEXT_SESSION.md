@@ -158,6 +158,37 @@ Neither bug is in the shared-socket conversion itself — but both must be
 understood before trusting an OTA through it. Run the upload from the real
 "Send via WiFi" button, watching `docs/poc` bench tools, before relying on it.
 
+## 3d. VM block coverage — 47% -> 60%, validated on hardware
+
+Rounds 4 and 4a/4b took the bytecode VM from 90 to 116 of the 193 blocks the
+Arduino generator supports. Flashed and exercised on the hub with a
+hand-assembled program: `map(50, 0..100 -> 0..1000)` returned exactly 500, the
+three sensor opcodes returned their "nothing attached" sentinels (0xFFFF, -1,
+8191) without faulting, the void opcodes did not trap, and the heartbeat
+counter kept advancing — so the VM survives every new opcode.
+
+**Key finding for the remaining work:** the I2C drivers are already members of
+`MiniR4.I2C1..I2C4`, so sensor opcodes cost flash and NOT static RAM. Measured
+across both rounds: static RAM unchanged at 23068 bytes, flash 61% -> 62%.
+Static RAM has ~228 bytes of headroom; flash has ~100 KB. That is what makes
+the rest affordable.
+
+**77 blocks remain**, of which ~31 are design boundaries, not pending work:
+BLE (ArduinoBLE cannot link beside WiFiS3), WiFi/MQTT (the VM runs inside the
+runtime that owns the radio), custom code (arbitrary C++ by definition), and
+strings (the VM is single-int32; strings need tagged values against a
+228-byte margin). The other ~46 are mechanical, following the round-4b
+pattern: digital/Grove sensors, numeric Serial, timers.
+
+`mini_i2c_MXmotion_*` is the one exception in the sensor family: there is no
+MXMotion instance on MiniR4I2C, so it needs a RAM decision rather than just an
+opcode.
+
+Measure coverage by LOADING the generators with a stubbed Blockly and reading
+the registered keys. A regex over `G['name']` is wrong in both directions: it
+misses blocks registered in a loop and counts handlers with no Arduino
+counterpart.
+
 ## 4. Still open from before
 
 - Release (§6 of `HANDOFF_NEXT_PHASES.md`): tag, GitHub Actions build,
