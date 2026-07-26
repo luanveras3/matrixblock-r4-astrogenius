@@ -45,6 +45,7 @@
             wifi:        'WiFi',
             noCable:     'no cable',
             cableIdle:   'cable connected, no link open',
+            cable:       'cable',
             usbHint:     'The cable link is held only while this window is open, so it never blocks a USB upload.',
             notConnected:'not connected',
             searching:   'Searching...',
@@ -113,6 +114,7 @@
             wifi:        'WiFi',
             noCable:     'sem cabo',
             cableIdle:   'cabo conectado, sem link aberto',
+            cable:       'cabo',
             usbHint:     'A conexão pelo cabo fica ativa só enquanto esta janela está aberta, para nunca atrapalhar um envio por USB.',
             notConnected:'não conectado',
             searching:   'Procurando...',
@@ -349,7 +351,11 @@
         // as — not "is our serial link open right now?", which is transient by
         // design and would read as unplugged nearly all the time.
         const path = (state.usb && state.usb.path) || (state.port && state.port.path);
-        const usbLabel  = path || tr('noCable');
+        // Just "cable", not the port name: the stock indicator already shows
+        // COM10 immediately to the left, and two copies side by side were
+        // noise. The port belongs in the panel, where there is room to say
+        // what it is doing.
+        const usbLabel  = path ? tr('cable') : tr('noCable');
         const wifiLabel = wifiUp()
             ? ((window.MBR4Hud.currentRobot() || {}).name || tr('connected'))
             : tr('notConnected');
