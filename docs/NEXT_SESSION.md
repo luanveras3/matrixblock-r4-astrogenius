@@ -105,12 +105,14 @@ Telemetry is also gated on the dashboard being visible (measured 0 / 45 / 0
 frames per 5 s: hidden, open, left). Between the two, the radio now works only
 when someone is actually using it.
 
-## 3c. OTA over the shared socket — STILL NOT VALIDATED, and two new bugs
+## 3c. OTA over the shared socket — still not validated; the two blocking bugs are FIXED
 
 Attempted 2026-07-25, did not complete. Record so the next attempt starts
 informed rather than repeating it:
 
-1. **`{"t":"radio","on":true}` leaves the sockets wedged.** It does
+1. ~~**`{"t":"radio","on":true}` leaves the sockets wedged.**~~ **FIXED** — it
+   reboots instead of re-initialising in place, and discovery works again
+   afterwards. Original analysis: It does
    `WiFi.end()` then `beginAP()` in place and rebinds UDP/TCP right after —
    the same modem mode-transition race already removed from
    `_refreshMacIdentity` by rebooting instead. Observed: after `radio on` the
@@ -119,7 +121,11 @@ informed rather than repeating it:
    instead of re-initialising in place.** Until then, `radio on` should be
    considered "needs a power cycle to be useful".
 
-2. **A client that dies mid-OTA appears to lock the runtime out.** The probe's
+2. ~~**A client that dies mid-OTA appears to lock the runtime out.**~~
+   **FIXED** — `_pollCommands` only ever looked for a waiting client when the
+   slot was free, so a half-open socket reporting connected() forever locked
+   the robot out permanently. It now preempts a client that has been silent
+   for 15 s, but only when someone else is actually knocking. Original report: The probe's
    Electron window closed during the upload and afterwards the hub refused new
    TCP connections and stopped answering discovery, recovered only by a USB
    reflash. The runtime is single-client; it likely never noticed the dead

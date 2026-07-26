@@ -332,6 +332,8 @@ private:
     // TCP line assembly (commands are small and flat; no ArduinoJson).
     char     _lineBuf[192];
     uint16_t _lineLen;
+    uint32_t _lastRxMs;         ///< last byte read from the TCP client
+    uint32_t _lastAcceptMs;     ///< last time we looked for a waiting client
 
     // --- USB serial config channel ---
     // The same NDJSON command set, reachable over the cable. This exists so

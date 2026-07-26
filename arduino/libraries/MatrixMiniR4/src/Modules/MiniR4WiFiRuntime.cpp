@@ -38,6 +38,14 @@ constexpr const char* AP_PASSWORD     = "matrix2026";
 constexpr uint32_t STA_JOIN_TIMEOUT_MS  = 10000;  ///< per begin() attempt
 constexpr uint32_t STA_RETRY_INTERVAL_MS = 30000; ///< re-try cadence in poll()
 constexpr uint32_t TICK_INTERVAL_MS   = 5;        ///< real work cadence in tick()
+// A crashed IDE leaves a half-open socket that reports connected() forever.
+// Since the runtime is single-client, that used to take the robot off the
+// network permanently — recoverable only by a USB reflash. We preempt such a
+// client, but ONLY when someone else is actually waiting for the slot: a
+// quiet-but-alive client is legitimate, and the sole harm of a stale one is
+// blocking the next connection.
+constexpr uint32_t CLIENT_IDLE_MS     = 15000;    ///< before it may be preempted
+constexpr uint32_t ACCEPT_CHECK_MS    = 3000;     ///< how often we look, when idle
 
 // Outgoing log budget. Each frame is a synchronous ~100 ms modem write, the
 // same budget telemetry spends, so 10/s — the figure first sketched — would
@@ -302,6 +310,8 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _waitingStart(false)
     , _startRequested(false)
     , _lineLen(0)
+    , _lastRxMs(0)
+    , _lastAcceptMs(0)
     , _serialLen(0)
     , _replyToSerial(false)
     , _logLineLen(0)
@@ -1212,12 +1222,32 @@ void MiniR4WiFiRuntimeClass::_pollCommands()
     // Only look for a new connection when there is no live client: every
     // g_server.available() call is a full SPI round-trip to the modem, and
     // doing it on every poll capped telemetry at ~9.4 Hz instead of 10.
-    if (!g_client || !g_client.connected()) {
+    const uint32_t now = millis();
+    const bool live = g_client && g_client.connected();
+
+    // Look for a waiting client when the slot is free, or when the current
+    // holder has gone quiet long enough to be suspect AND someone else wants
+    // in. The idle check is rate-limited because every available() call is a
+    // full SPI round-trip to the modem — doing it every poll is what used to
+    // cap telemetry at ~9.4 Hz instead of 10.
+    const bool slotFree  = !live;
+    const bool mayPreempt = live &&
+                            (now - _lastRxMs > CLIENT_IDLE_MS) &&
+                            (now - _lastAcceptMs > ACCEPT_CHECK_MS);
+    if (slotFree || mayPreempt) {
+        _lastAcceptMs = now;
         WiFiClient incoming = g_server.available();
         if (incoming) {
+            if (live) {
+                // Someone is knocking and the holder has said nothing for
+                // CLIENT_IDLE_MS: assume it died and hand the slot over.
+                WIFIRT_TRACE(F("preempting an idle TCP client"));
+                g_client.stop();
+            }
             g_client   = incoming;
             _lineLen   = 0;
             _tmOn      = false;   // stream is opt-in per connection
+            _lastRxMs  = now;
         }
     }
 
@@ -1226,6 +1256,7 @@ void MiniR4WiFiRuntimeClass::_pollCommands()
     while (g_client.available()) {
         const int c = g_client.read();
         if (c < 0) break;
+        _lastRxMs = millis();
         if (c == '\n') {
             _lineBuf[_lineLen] = '\0';
             if (_lineLen > 0) _handleLine(_lineBuf);
@@ -1421,10 +1452,22 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
             _netMode = NET_DOWN;
             WIFIRT_TRACE(F("radio off (until reboot)"));
         } else {
-            _radioDisabled = false;
-            _startNetwork(false);
-            _sendJson("{\"t\":\"ack\",\"cmd\":\"radio\",\"ok\":%s,\"on\":true}",
-                      _netMode != NET_DOWN ? "true" : "false");
+            // Reboot rather than bring the AP back up in place. Doing
+            // WiFi.end() -> beginAP() and rebinding the sockets right after
+            // is the modem mode-transition race already removed from
+            // _refreshMacIdentity: the AP returns and answers ping, but UDP
+            // and TCP never reach the sketch again until a power cycle. This
+            // path repeated that mistake and hardware reproduced it exactly.
+            //
+            // Since the off state is not persisted, a reset IS the way back
+            // on — and it costs nothing extra, because the radio was down and
+            // there was no session to preserve.
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"radio\",\"ok\":true,\"on\":true,"
+                      "\"rebooting\":true}");
+            if (_replyToSerial) Serial.flush();
+            else                g_client.flush();
+            delay(150);
+            NVIC_SystemReset();
         }
 
     } else if (!strcmp(type, "start")) {
