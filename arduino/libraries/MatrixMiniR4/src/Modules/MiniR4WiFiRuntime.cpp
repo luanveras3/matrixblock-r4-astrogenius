@@ -75,7 +75,12 @@ constexpr uint32_t LOG_NOTE_INTERVAL_MS  = 1000;  ///< "N dropped" summary caden
 // reads back 0xFF (erased) which parses as "default password" — compatible.
 constexpr uint32_t DATAFLASH_BLOCK   = 1024;
 constexpr uint32_t CONFIG_ADDR       = 6 * DATAFLASH_BLOCK;  // block 6
-constexpr uint32_t CONFIG_SIZE       = 192;                  // 4-aligned
+constexpr uint32_t CONFIG_SIZE       = 196;                  // 4-aligned
+// Offset 192: radio-disabled flag. 0x00 = start with the radio OFF, anything
+// else (including 0xFF from erased flash and every record written before this
+// existed) = radio on. Persisting "off" is only safe because two rescue paths
+// exist that ignore it: the USB config channel, and BTN_UP recovery.
+constexpr uint32_t CFG_OFF_RADIO     = 192;
 constexpr uint8_t  CONFIG_MAGIC[4]   = {'M', 'B', 'R', 'W'};
 constexpr uint8_t  MAX_NAME_LEN      = 24;
 constexpr uint8_t  MAX_SSID_LEN      = 32;
@@ -407,6 +412,24 @@ void MiniR4WiFiRuntimeClass::begin()
     // sketch never runs. Guarantees a hub with a crashing/blocking sketch
     // can always be re-flashed over the air (manual §2.4 — mandatory).
     const bool recovery = MiniR4.BTN_UP.getState() && !MiniR4.BTN_DOWN.getState();
+
+    // Honour the persisted "start with the radio off" preference — but NEVER
+    // in recovery mode. BTN_UP at power-on is the guaranteed way back in, and
+    // it would be worthless if a stored flag could silence it. That, plus the
+    // USB channel always answering, is what makes persisting "off" safe.
+    if (_radioOffAtBoot && !recovery) {
+        _radioDisabled = true;
+        _netMode = NET_DOWN;
+        WIFIRT_TRACE(F("radio off at boot (stored preference)"));
+        // Say so on the OLED for a moment. A robot that cannot be found
+        // because someone switched its radio off should explain itself
+        // rather than look broken — that confusion cost a whole session.
+        _oledStatus("WiFi OFF", "USB or BTN_UP");
+        delay(1200);
+        MiniR4.OLED.clearDisplay();
+        MiniR4.OLED.display();
+        return;
+    }
 
     _startNetwork(recovery);
 
@@ -974,6 +997,7 @@ bool MiniR4WiFiRuntimeClass::factoryReset()
     _nameCustom = false;
     _macCache[0] = _macCache[1] = 0xFF;
     _apPassCustom = false;
+    _radioOffAtBoot = false;
     strncpy(_apPass, AP_PASSWORD, sizeof(_apPass) - 1);
 
     // Re-derive the default identity now instead of leaving _name blank until
@@ -1351,13 +1375,14 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         jsonEscape(_apSsid, apNowEsc, sizeof(apNowEsc));
         _sendJson("{\"t\":\"info\",\"name\":\"%s\",\"mac\":\"%s\",\"fw\":\"%s\","
                   "\"ip\":\"%u.%u.%u.%u\",\"mode\":\"%s\",\"ssid\":\"%s\","
-                  "\"ap\":\"%s\",\"waiting\":%s,\"radio\":%s,"
+                  "\"ap\":\"%s\",\"waiting\":%s,\"radio\":%s,\"radioBoot\":%s,"
                   "\"batt\":%d.%02d,\"uptime\":%lu}",
                   nameEsc, _mac4, MINIR4_WIFI_RUNTIME_VERSION,
                   ip[0], ip[1], ip[2], ip[3],
                   _netMode == NET_AP ? "ap" : "sta", ssidEsc, apNowEsc,
                   _waitingStart ? "true" : "false",
                   _radioDisabled ? "false" : "true",
+                  _radioOffAtBoot ? "false" : "true",
                   (int)MiniR4.PWR.getBattVoltage(),
                   (int)(MiniR4.PWR.getBattVoltage() * 100) % 100,
                   (unsigned long)millis());
@@ -1450,8 +1475,23 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
             _tmOn = false;
             WiFi.end();
             _netMode = NET_DOWN;
-            WIFIRT_TRACE(F("radio off (until reboot)"));
+            // "keep":true makes it survive power cycles — the difference
+            // between quieting the robot now and actually leaving it off.
+            bool keep = false;
+            jsonBool(line, "keep", keep);
+            if (keep && !_radioOffAtBoot) {
+                _radioOffAtBoot = true;
+                _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
+            }
+            WIFIRT_TRACE(F("radio off"));
         } else {
+            // Turning it back on always clears the stored preference: the
+            // user asked for the radio, and leaving a flag that silences it
+            // again at the next power-on would be a trap.
+            if (_radioOffAtBoot) {
+                _radioOffAtBoot = false;
+                _writeConfig(_nameCustom ? _name : nullptr, _ssid, _pass);
+            }
             // Reboot rather than bring the AP back up in place. Doing
             // WiFi.end() -> beginAP() and rebinding the sockets right after
             // is the modem mode-transition race already removed from
@@ -1960,6 +2000,7 @@ bool MiniR4WiFiRuntimeClass::_readConfig(char* nameOut, char* ssidOut, char* pas
         _macCache[0] = buf[CFG_OFF_MAC];
         _macCache[1] = buf[CFG_OFF_MAC + 1];
     }
+    _radioOffAtBoot = (buf[CFG_OFF_RADIO] == 0x00);
     const uint8_t apLen = buf[CFG_OFF_APPASSLEN];
     if (apLen >= MIN_AP_PASS_LEN && apLen <= MAX_AP_PASS_LEN) {
         memcpy(_apPass, buf + CFG_OFF_APPASS, apLen);
@@ -1993,6 +2034,7 @@ bool MiniR4WiFiRuntimeClass::_writeConfig(const char* name, const char* ssid, co
     }
     buf[CFG_OFF_MAC]     = _macCache[0];
     buf[CFG_OFF_MAC + 1] = _macCache[1];
+    buf[CFG_OFF_RADIO]   = _radioOffAtBoot ? 0x00 : 0xFF;
     if (_apPassCustom) {
         const size_t apLen = strlen(_apPass);
         buf[CFG_OFF_APPASSLEN] = (uint8_t)apLen;

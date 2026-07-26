@@ -325,6 +325,13 @@ private:
     /// back — turning the radio off over WiFi obviously cannot be undone
     /// over WiFi.
     bool     _radioDisabled;
+    /// Persisted preference: start with the radio off after a power cycle.
+    /// Unlike _radioDisabled this DOES survive reboots, which is the whole
+    /// point — a hub left on a competition table or a desk should stay quiet
+    /// without anyone remembering to switch it off. Safe only because two
+    /// rescue paths ignore it: the USB channel always answers, and BTN_UP
+    /// recovery forces the radio up regardless.
+    bool     _radioOffAtBoot;
     uint32_t _tickLastMs;          ///< throttle for tick()
     bool     _waitingStart;        ///< parked in waitForStart()
     bool     _startRequested;      ///< a remote {"t":"start"} arrived
