@@ -75,6 +75,12 @@
             factory:     'Factory reset',
             reboot:      'Restart hub',
             start:       'Start program',
+            radioOff:    'Turn WiFi off',
+            radioWarn:   'The robot stops using WiFi until you turn it off and on again. It saves battery and satisfies competition rules that forbid radios during a run.
+
+You can still reach it with the USB cable. Continue?',
+            radioOffOk:  'WiFi off. Reach the robot with the USB cable, or restart it to bring WiFi back.',
+            radioIsOff:  'WiFi is off on this robot (until it restarts).',
             nameHint:    'Also becomes the robot\'s WiFi name, as <name>-%s, from the next restart.',
             wifiHint:    'The network the robot should join. Leave empty and press Forget for it to use its own AP.',
             apHint:      'Between 8 and 63 characters. Empty restores matrix2026. Applies on the next restart.',
@@ -131,6 +137,12 @@
             factory:     'Reset de fábrica',
             reboot:      'Reiniciar hub',
             start:       'Iniciar programa',
+            radioOff:    'Desligar o WiFi',
+            radioWarn:   'O robô para de usar WiFi até você desligar e ligar ele de novo. Economiza bateria e atende às regras de competição que proíbem rádio durante a rodada.
+
+Você ainda alcança ele pelo cabo USB. Continuar?',
+            radioOffOk:  'WiFi desligado. Use o cabo USB para falar com o robô, ou reinicie para voltar o WiFi.',
+            radioIsOff:  'O WiFi deste robô está desligado (até ele reiniciar).',
             nameHint:    'Também vira o nome do WiFi do robô, como <nome>-%s, a partir do próximo reinício.',
             wifiHint:    'A rede em que o robô deve entrar. Deixe vazio e clique em Esquecer para ele usar o próprio AP.',
             apHint:      'Entre 8 e 63 caracteres. Vazio volta para matrix2026. Vale no próximo reinício.',
@@ -340,6 +352,12 @@
                  '</div>';
         }
 
+        if (info && info.radio === false) {
+            h += '<div style="margin-bottom:10px;padding:8px 10px;border-radius:4px;' +
+                 'background:#e0e7ff;color:#3730a3;font-size:13px;">' +
+                 esc(tr('radioIsOff')) + '</div>';
+        }
+
         if (info && info.waiting === true) {
             h += '<div style="margin-bottom:10px;padding:8px 10px;border-radius:4px;' +
                  'background:#dcfce7;color:#166534;font-size:13px;display:flex;' +
@@ -433,6 +451,7 @@
                    field('connApPass', tr('fApPass'), '', tr('apHint')) +
                    '<button id="connSaveAp" type="button" class="connBtnPrimary">' + esc(tr('save')) + '</button>') +
                sec(tr('secActions'),
+                   '<button id="connRadioOff" type="button" class="connBtn">' + esc(tr('radioOff')) + '</button> ' +
                    '<button id="connForgetVm" type="button" class="connBtn">' + esc(tr('forgetVm')) + '</button> ' +
                    '<button id="connReboot" type="button" class="connBtn">' + esc(tr('reboot')) + '</button> ' +
                    '<button id="connFactory" type="button" class="connBtnDanger">' + esc(tr('factory')) + '</button>');
@@ -519,6 +538,14 @@
         on('connSaveWifi',  () => guard(() => ackOr('setwifi', { t: 'setwifi', ssid: val('connSsid'), pass: val('connPass') }, tr('okWifi'))));
         on('connClearWifi', () => guard(() => ackOr('setwifi', { t: 'setwifi', ssid: '', pass: '' }, tr('okWifiClr'))));
         on('connSaveAp',    () => guard(() => ackOr('setappass', { t: 'setappass', pass: val('connApPass') }, tr('okAp'))));
+        on('connRadioOff', () => guard(async () => {
+            if (!window.confirm(tr('radioWarn'))) return;
+            // Over WiFi this is the last thing that link will ever carry, so
+            // a dropped socket afterwards is success, not failure.
+            await request({ t: 'radio', on: false },
+                          (o) => o.t === 'ack' && o.cmd === 'radio', 5000).catch(() => {});
+            status(tr('radioOffOk'), 'ok');
+        }));
         on('connForgetVm',  () => guard(() => ackOr('vm_forget', { t: 'vm_forget' }, tr('okVm'))));
         on('connReboot',    () => guard(async () => {
             await request({ t: 'reboot' }, (o) => o.t === 'ack' && o.cmd === 'reboot', 4000).catch(() => {});

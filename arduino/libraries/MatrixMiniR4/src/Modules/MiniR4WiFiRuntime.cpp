@@ -297,6 +297,7 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _begun(false)
     , _nameCustom(false)
     , _lastStaRetryMs(0)
+    , _radioDisabled(false)
     , _tickLastMs(0)
     , _waitingStart(false)
     , _startRequested(false)
@@ -420,8 +421,11 @@ void MiniR4WiFiRuntimeClass::poll()
     if (!_begun) return;
 
     // Before the network guard, always: the USB channel is the fallback for
-    // exactly the situation where the network is down.
+    // exactly the situation where the network is down — including when the
+    // radio has been switched off on purpose.
     _pollSerial();
+
+    if (_radioDisabled) { _pollVm(); return; }
 
     if (_netMode == NET_DOWN) {
         // Periodic STA re-try (e.g. router came back after a power cut).
@@ -1316,12 +1320,13 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         jsonEscape(_apSsid, apNowEsc, sizeof(apNowEsc));
         _sendJson("{\"t\":\"info\",\"name\":\"%s\",\"mac\":\"%s\",\"fw\":\"%s\","
                   "\"ip\":\"%u.%u.%u.%u\",\"mode\":\"%s\",\"ssid\":\"%s\","
-                  "\"ap\":\"%s\",\"waiting\":%s,"
+                  "\"ap\":\"%s\",\"waiting\":%s,\"radio\":%s,"
                   "\"batt\":%d.%02d,\"uptime\":%lu}",
                   nameEsc, _mac4, MINIR4_WIFI_RUNTIME_VERSION,
                   ip[0], ip[1], ip[2], ip[3],
                   _netMode == NET_AP ? "ap" : "sta", ssidEsc, apNowEsc,
                   _waitingStart ? "true" : "false",
+                  _radioDisabled ? "false" : "true",
                   (int)MiniR4.PWR.getBattVoltage(),
                   (int)(MiniR4.PWR.getBattVoltage() * 100) % 100,
                   (unsigned long)millis());
@@ -1400,6 +1405,27 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         else                g_client.flush();
         delay(150);   // let the ack leave the modem / UART
         NVIC_SystemReset();
+
+    } else if (!strcmp(type, "radio")) {
+        bool on = true;
+        jsonBool(line, "on", on);
+        if (!on) {
+            // Ack and flush BEFORE killing the radio, or the caller sees a
+            // dropped socket and reports a failure for something that worked.
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"radio\",\"ok\":true,\"on\":false}");
+            if (_replyToSerial) Serial.flush();
+            else { g_client.flush(); delay(120); }
+            _radioDisabled = true;
+            _tmOn = false;
+            WiFi.end();
+            _netMode = NET_DOWN;
+            WIFIRT_TRACE(F("radio off (until reboot)"));
+        } else {
+            _radioDisabled = false;
+            _startNetwork(false);
+            _sendJson("{\"t\":\"ack\",\"cmd\":\"radio\",\"ok\":%s,\"on\":true}",
+                      _netMode != NET_DOWN ? "true" : "false");
+        }
 
     } else if (!strcmp(type, "start")) {
         // Releases waitForStart(). Acked with whether the robot was actually

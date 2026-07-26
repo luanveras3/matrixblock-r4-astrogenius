@@ -318,6 +318,13 @@ private:
     char     _apPass[64];          ///< effective AP password (default or custom)
     bool     _apPassCustom;        ///< a user-set AP password exists in flash
     uint32_t _lastStaRetryMs;
+    /// Radio switched off by {"t":"radio","on":false}. Deliberately NOT
+    /// persisted: a hub that boots with its radio off is a hub nobody can
+    /// find, which is the exact failure this whole branch fights. Off lasts
+    /// until the next power cycle, and the USB channel is always the way
+    /// back — turning the radio off over WiFi obviously cannot be undone
+    /// over WiFi.
+    bool     _radioDisabled;
     uint32_t _tickLastMs;          ///< throttle for tick()
     bool     _waitingStart;        ///< parked in waitForStart()
     bool     _startRequested;      ///< a remote {"t":"start"} arrived
