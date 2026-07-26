@@ -35,25 +35,34 @@ diff -u <your copy> resources/app_src/<same path>
 
 ### 1. `arduino/libraries/MatrixMiniR4/src/Modules/Sensors/MiniR4_MXColorV3.cpp`
 
-**Six lines, in `begin()` only.** This is the change most worth your attention,
-because it is a bug fix in the shipped library rather than an addition of ours.
+**Six lines in `begin()` — and the one change in this fork we are NOT confident
+about. Please read the caveat before accepting it.**
 
-`begin()` powered the chip and enabled the ADC but never wrote integration time
-or gain, so the TCS34725 kept its post-reset defaults (minimum integration,
-1x gain). In ordinary room light the clear channel then falls under the
-`if (c < 20) return 0` guard inside `getR/getG/getB`, so every channel reads 0
-and `getColorID()` returns -1 — while the sensor answers on I2C and
-`begin()` returns true. It looks like a dead sensor and is simply underexposed.
+`begin()` powers the chip and enables the ADC but never writes integration time
+or gain, so the TCS34725 keeps its post-reset defaults (minimum integration,
+1x gain). `TCS34725_ATIME` and `TCS34725_CONTROL` are defined in the header and
+written nowhere, which is what drew our attention.
 
-`TCS34725_ATIME` and `TCS34725_CONTROL` were already defined in the header and
-written nowhere, which is what gave the omission away.
+We added those two writes plus a 60 ms wait before the first read. Measured on
+our bench: every channel went from 0 (and `getColorID()` from -1) to
+`63/111/115` and ID 3.
 
-The fix writes ATIME (50 ms) and gain (4x) before enabling the ADC, and waits
-one integration cycle so the first conversion is valid. Measured on the same
-sensor and lighting: `0/0/0` and ID `-1` became `63/111/115` and ID `3` (blue).
+**The caveat.** That change did two things at once and we never separated them.
+The sensor also needs a full integration cycle before its first valid
+conversion, and our failing test read immediately after `begin()` inside a
+tight VM loop. The stock IDE puts `begin()` in `setup()` and reads in `loop()`,
+which gives that time for free — and an earlier note of ours records the HUD
+showing colours that were *mislabelled*, not zero, meaning the stock path was
+reading real data.
 
-We suspect this also explains long-standing reports of the V3 sensor
-misclassifying colours: a starved signal classifies badly.
+So the honest position: **the 60 ms wait may be the whole fix, and the
+exposure configuration may be unnecessary or even unwanted** if your defaults
+are deliberate. Users report the stock software working with this sensor, which
+is evidence against our reading.
+
+To settle it, revert `begin()` to stock, keep only the delay, and see whether
+colours read. We did not run that experiment before shipping the change, and
+we should have.
 
 Commit: `ca1e71f`.
 
@@ -125,3 +134,30 @@ before.
   that needs to service a transport from `loop()`, that busy-wait starves it
   from the first statement of the typical student program. We work around it
   in our wrapper, but the generator output is worth fixing at the source.
+
+---
+
+## Going back to the official version
+
+A fair question from anyone evaluating this fork: what does it take to undo?
+
+**The other two chips are untouched.** The STM32F103 (MMLower) and the
+ESP32-S3 usb-bridge run stock factory firmware. Nothing to revert, which is
+also why nothing in this fork ever needs DFU.
+
+**The RA4M1 reverts with one upload.** Everything we ship lives there, and it
+ships as library source — every IDE compile embeds it, so a hub receives it
+with the first program a student sends. Going back is symmetrical: install the
+official app, upload any program, and the hub is stock. Until that upload the
+hub keeps our runtime and stays on WiFi, which surprises people who expect the
+swap to be instant.
+
+**Dataflash keeps two inert records.** Our config lives in block 6 (magic
+`MBRW`) and a saved VM program in blocks 1-4 (`MBVM`). The stock firmware reads
+neither, so they occupy space and do nothing. A factory reset clears them.
+
+**One regression on reverting:** the MXColorV3 change above goes away with the
+library, so if that fix is real, the sensor returns to its previous behaviour.
+Given the caveat on that change, this may be a non-issue.
+
+Nothing here can brick a hub, and no step requires DFU in either direction.
