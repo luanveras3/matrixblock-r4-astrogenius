@@ -199,6 +199,23 @@ counterpart.
   hub) and the BTN_UP rescue of a deliberately-blocking sketch — note that
   item 1 above now gives us the perfect blocking sketch for it.
 
+## 4b. Probes MUST answer the app's dialogs
+
+The app raises SweetAlert2 dialogs a human dismisses without thinking and a
+probe never answers:
+
+- **"Restore previous session?"** at startup, whenever tabs were left open;
+- **"unsaved changes / close anyway?"** on quit.
+
+A probe that ignores them looks exactly like a crash — the evaluate hangs or
+the window disappears, and every observation collected so far is lost. This
+cost two misdiagnoses in one session: an OTA run was blamed first on a modem
+wedge and then on the battery, when a modal was simply waiting for a click.
+
+Use `probe_helpers.js`: `launchApp()` starts the app with a background
+watcher already dismissing dialogs, and `closeApp()` answers the quit prompt.
+Never call `electron.launch()` directly in a new probe.
+
 ## 5. Corrections to carry forward
 
 The 2026-07-25 "hub pings but does not answer" incident was blamed first on a

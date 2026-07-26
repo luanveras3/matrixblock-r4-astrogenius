@@ -34,6 +34,10 @@
 !tools/wifi_wrapper.test.js
 !tools/bytecode_map.test.js
 !tools/hubctl.js
+# Probe scripts stay untracked on purpose, but this one is shared
+# infrastructure: it encodes how to answer the app's startup/quit dialogs,
+# which two failed OTA validations were misdiagnosed for lack of.
+!probe_helpers.js
 !tools/stress_upload_wifi.js
 !tools/lzss_ref.py
 !tools/fixtures/
