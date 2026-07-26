@@ -133,6 +133,19 @@ informed rather than repeating it:
    socket (idle timeout or write failure) so one crashed client cannot take
    the robot off the network.
 
+**Attempt 2 (after both fixes) got much further and still did not close.**
+The pipeline worked: compiled 155000 B, converted to a 121862 B .ota,
+transferred, and reached "waiting for the robot to come back" — so download,
+verify and apply all completed. What could not be confirmed is whether the new
+image booted: the Electron window died during the post-flash wait, and the hub
+then answered on neither WiFi nor USB until a USB reflash.
+
+**Stop driving this from a headless probe.** A long flow that opens dialogs
+and ends with the robot rebooting is the worst possible fit for it: when the
+window dies mid-flight every observation is lost, and twice now that produced
+a misleading diagnosis. Run it from the real "Send via WiFi" button with a
+human watching, and use the bench tools only to check the result afterwards.
+
 Neither bug is in the shared-socket conversion itself — but both must be
 understood before trusting an OTA through it. Run the upload from the real
 "Send via WiFi" button, watching `docs/poc` bench tools, before relying on it.
