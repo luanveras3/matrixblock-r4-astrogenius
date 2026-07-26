@@ -383,3 +383,65 @@ Cost: +192 B statics for the line buffer (23036 B total, 70%, 260 B slack).
 Bench script: `usb_config_test.ps1`. In-app end-to-end probe:
 `usb_config_probe.js` (15 checks, including a rename applied over the cable
 and the SSID warning).
+
+---
+
+## The radio does not go away when our firmware does (measured 2026-07-26)
+
+Question raised on the bench: after switching the IDE back to the official
+build and uploading from it, is our wireless mode disabled?
+
+**Yes — but nothing about the hub looks any different from outside**, which is
+the part worth knowing.
+
+### What the code says
+
+Nothing in the stock path can start our runtime. `WiFiRuntime` is a global in
+`MiniR4WiFiRuntime.cpp`, and the only code that calls `begin()`/`poll()` is the
+wrapper our IDE injects into the generated sketch
+(`arduino_wifi_wrapper.js`). A grep across the whole library finds **no other
+reference to it** — the one hit outside its own files is a comment in
+`MiniR4VM.h`, and `MatrixMiniR4.h` does not include it.
+
+That matters more than "the official app does not call it". Arduino archives a
+library into a `.a` and the linker pulls an object file only to resolve an
+undefined symbol. With nothing referencing `WiFiRuntime`, the object is never
+linked: the code is not in the binary at all. Not a dormant radio — absent
+code, zero flash, zero RAM.
+
+The library stays installed in `arduino/libraries/` whichever app build is
+active, because swapping `app.asar` does not touch the toolchain. That is
+harmless for exactly the reason above.
+
+### What the hardware says
+
+After a simple sketch uploaded from the **official** app, with the PC
+associated to the hub's access point at full signal:
+
+| Check | Result |
+|---|---|
+| UDP discovery (47801) | **nothing found** |
+| Access point `Uni11-B0BC` | **still broadcasting** |
+| PC associated, 100% signal | yes |
+| ICMP to 192.168.4.1 | **replies** |
+| TCP 47802 (our command port) | **accepts the connection** |
+| `{"t":"info"}` on that socket | **zero bytes in 8 s** |
+
+So the hub answers at every layer the **ESP32-S3 modem** owns — association,
+IP, even the TCP handshake on a socket the previous firmware had left
+listening — and at no layer the **RA4M1** owns. The modem is a separate chip
+holding state across a reflash of the main MCU; it was never told to stop.
+
+This is the same trap as the MXColorV3 diagnosis: an independent chip keeps its
+configuration across an MCU reset, so a measurement taken after the reset can
+be reporting the *previous* firmware's setup.
+
+### Two practical consequences
+
+1. **"I went back to the official app but the robot is still in my WiFi list"**
+   is expected, not a bug, and not our firmware still running. Port 47802 even
+   accepting a connection makes it look alive; nothing answers on it.
+2. **The radio keeps drawing current** after the switch, until the modem is
+   actually powered down. A power cycle should clear it — resetting the RA4M1
+   will not, since that is not what is holding the AP up. Worth remembering
+   whenever battery life is being measured.
