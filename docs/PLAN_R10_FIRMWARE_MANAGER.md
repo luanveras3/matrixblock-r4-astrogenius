@@ -88,16 +88,24 @@ release for.
 
 Minimum viable scope, much smaller than full R10:
 
-1. Report the bridge version. `WiFi.firmwareVersion()` on the hub, added to the
-   `info` frame next to the runtime version.
-2. **Check it before an OTA** and refuse early with a clear message naming the
-   version found and the version needed — rather than letting the upload fail
-   deep inside OTAUpdate.
+1. ~~Report the bridge version.~~ **DONE (`bf5710a`).** `WiFi.firmwareVersion()`
+   is in the `info` frame next to the runtime version. Bench hub reports
+   `"bridge": "0.6.0"`.
+2. ~~**Check it before an OTA**~~ **DONE (`bf5710a`).** `wifi_upload.js` asks for
+   `info` before compiling and refuses a version below 0.5.0, naming what it
+   found and what it needs, and pointing at the Arduino Firmware Updater or the
+   USB cable. Two deliberate leniencies: an absent field proceeds (an older
+   runtime does not report it, and refusing would block hubs that work), and a
+   version failure is not retried by the automatic second attempt.
 3. Offer the update: bundle `arduino-fwuploader` and run it from the app.
-   This layer needs **no DFU**.
+   This layer needs **no DFU**. **Still open** — and no longer blocks release.
 
-Steps 1 and 2 alone remove the bad first impression, and are small. Step 3 is
-the real convenience and is where the bundling work is.
+Steps 1 and 2 removed the bad first impression, and were small. Step 3 is the
+real convenience and is where the bundling work is.
+
+**The release gate is now clear.** Only the refusal path is unverified: the
+bench hub is on 0.6.0, so the branch that fires has been reasoned through but
+never executed. Testing it needs a hub with old modem firmware.
 
 The rest of R10 — the four-version panel, the MMLower over DFU — does **not**
 gate the release. The current Firmware Update menu behaves exactly as the
