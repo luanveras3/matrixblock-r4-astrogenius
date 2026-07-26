@@ -314,6 +314,16 @@ private:
     char     _logLine[128];
     uint8_t  _logLineLen;
 
+    // Outgoing-log rate limit (token bucket). Every log frame costs a
+    // synchronous ~100 ms modem write — the same budget telemetry spends —
+    // so a print inside a tight loop is a denial of service the student
+    // aims at their own robot. USB Serial is never throttled; only the
+    // wireless copy is.
+    uint32_t _logTokenMs;          ///< last time tokens were granted
+    uint32_t _logNoteMs;           ///< last "N dropped" summary
+    uint8_t  _logTokens;
+    uint16_t _logDropped;          ///< since the last summary
+
     // Telemetry stream state.
     bool     _tmOn;
     uint16_t _tmIntervalMs;

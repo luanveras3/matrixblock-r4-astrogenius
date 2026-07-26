@@ -10,9 +10,12 @@ implemented, to be picked up cold. Ordered by what unblocks the most.
 Fixed and hardware-validated; see §0 of `BUG_BLOCKING_USERLOOP.md` for what
 was done and the acceptance results. What remains from the original list:
 
-- [ ] **Rate-limit `log()`** — still open. Every frame is a synchronous
-      ~100 ms modem write, so prints inside a tight loop remain a self-DoS.
-      Cap ~10/s, drop the excess, emit a periodic "N lines dropped".
+- [x] **Rate-limit `log()`** — done 2026-07-25. Token bucket, 5 lines/s with a
+      burst of 8, and a "N line(s) dropped" summary at most once a second.
+      Not the 10/s first sketched: each frame is a ~100 ms synchronous modem
+      write, so 10/s would consume the radio outright and starve telemetry.
+      Measured under a flood: 10.3 → 6.7 frames/s (5.7 lines + 1.0 note),
+      while USB Serial stayed unthrottled at 25 lines/s.
 - [ ] **Fix `control_wait_until` in the Arduino generator** — still open. The
       wrapper now catches it, so this is no longer urgent, but the generator
       still emits a bare `while(!cond);` which is wrong on its own terms and

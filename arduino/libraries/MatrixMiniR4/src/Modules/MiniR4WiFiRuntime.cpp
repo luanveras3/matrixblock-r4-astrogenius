@@ -39,6 +39,15 @@ constexpr uint32_t STA_JOIN_TIMEOUT_MS  = 10000;  ///< per begin() attempt
 constexpr uint32_t STA_RETRY_INTERVAL_MS = 30000; ///< re-try cadence in poll()
 constexpr uint32_t TICK_INTERVAL_MS   = 5;        ///< real work cadence in tick()
 
+// Outgoing log budget. Each frame is a synchronous ~100 ms modem write, the
+// same budget telemetry spends, so 10/s — the figure first sketched — would
+// consume the radio entirely and leave nothing for the dashboard. 5/s is
+// still faster than anyone reads, and the burst lets an ordinary print
+// (a handful of lines, then silence) through with no delay at all.
+constexpr uint8_t  LOG_LINES_PER_SEC     = 5;
+constexpr uint8_t  LOG_BURST             = 8;
+constexpr uint32_t LOG_NOTE_INTERVAL_MS  = 1000;  ///< "N dropped" summary cadence
+
 // --- Dataflash config record (block 6, magic 'MBRW') ------------------------
 // Erased flash reads 0xFF everywhere; missing magic = "no config, defaults".
 //   0..3    'M','B','R','W'
@@ -293,6 +302,10 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _serialLen(0)
     , _replyToSerial(false)
     , _logLineLen(0)
+    , _logTokenMs(0)
+    , _logNoteMs(0)
+    , _logTokens(LOG_BURST)
+    , _logDropped(0)
     , _tmOn(false)
     , _tmIntervalMs(100)
     , _tmLastMs(0)
@@ -762,10 +775,59 @@ void MiniR4WiFiRuntimeClass::safeDelay(uint32_t ms)
 void MiniR4WiFiRuntimeClass::log(const char* msg)
 {
     if (!msg || !*msg) return;
-    if (!g_client || !g_client.connected()) return;   // no client, silent drop
+    if (!g_client || !g_client.connected()) {   // no client, silent drop
+        _logDropped = 0;                        // nothing to apologise for later
+        return;
+    }
+
+    // --- Rate limit -------------------------------------------------------
+    // A student printing inside a `while` loop generates lines far faster
+    // than the radio can drain them, and every frame blocks the sketch for
+    // ~100 ms. Unthrottled, that starves telemetry, makes the robot sluggish
+    // and floods the console with output nobody can read anyway.
+    //
+    // Token bucket rather than a flat cap: a burst of a few lines — which is
+    // what a print usually is — goes out instantly, while a loop settles to
+    // a readable rate that leaves the modem budget for telemetry.
+    const uint32_t now = millis();
+    const uint32_t elapsed = now - _logTokenMs;
+    const uint32_t gained  = (elapsed * LOG_LINES_PER_SEC) / 1000UL;
+    if (gained) {
+        const uint32_t tokens = (uint32_t)_logTokens + gained;
+        _logTokens = (uint8_t)(tokens > LOG_BURST ? LOG_BURST : tokens);
+        // Advance by exactly what we granted, so the leftover milliseconds
+        // still count towards the next token instead of being rounded away.
+        _logTokenMs += (gained * 1000UL) / LOG_LINES_PER_SEC;
+    }
+
+    if (_logTokens == 0) {
+        if (_logDropped < 0xFFFF) _logDropped++;
+        return;
+    }
+    _logTokens--;
+
+    char escaped[200];
+
+    // Tell the user output was thrown away — silently losing their prints
+    // would be worse than the flood, because they would trust what they see.
+    //
+    // But at most once a second: under a continuous flood every accepted line
+    // has drops behind it, so emitting a note each time doubled the frames on
+    // the wire and gave back half the budget this limit exists to protect
+    // (measured: 10.3 frames/s against a 5/s target). Summarising instead
+    // keeps the warning useful and the radio quiet.
+    if (_logDropped && (now - _logNoteMs) >= LOG_NOTE_INTERVAL_MS) {
+        char note[64];
+        snprintf(note, sizeof(note), "... %u line(s) dropped (printing too fast)",
+                 (unsigned)_logDropped);
+        _logDropped = 0;
+        _logNoteMs  = now;
+        jsonEscape(note, escaped, sizeof(escaped));
+        _sendJson("{\"t\":\"log\",\"s\":\"%s\"}", escaped);
+    }
+
     // Escaping up front keeps _sendJson's format string tiny — the msg is
     // pre-safe by the time it goes into vsnprintf.
-    char escaped[200];
     jsonEscape(msg, escaped, sizeof(escaped));
     _sendJson("{\"t\":\"log\",\"s\":\"%s\"}", escaped);
 }

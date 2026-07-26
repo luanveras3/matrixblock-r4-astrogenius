@@ -59,6 +59,15 @@ Based on upstream v1.0.8. Format loosely inspired by
     working, which reads as a broken robot.
 
 ### Fixed
+- **Prints inside a loop no longer flood the radio.** Every log frame is a
+  synchronous ~100 ms modem write — the same budget telemetry spends — so a
+  print inside a tight loop was a denial of service the student aimed at
+  their own robot. Outgoing log lines are now rate-limited with a token
+  bucket (5 lines/s, burst of 8), with a "N line(s) dropped" summary at most
+  once a second so output is never lost silently. **USB Serial is not
+  throttled**: the serial monitor keeps full speed, and the sketch itself
+  runs faster now that most lines no longer block on the modem (measured:
+  25 lines/s over USB against 5.7/s over WiFi).
 - **Blocking user code no longer takes the hub off the network.** The runtime
   is cooperatively scheduled, so any loop that does not return starved
   discovery, TCP, telemetry *and* the USB channel. This was not an edge case:
