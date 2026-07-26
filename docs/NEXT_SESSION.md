@@ -191,6 +191,12 @@ counterpart.
 
 ## 4. Still open from before
 
+- **Release is GATED on the bridge-firmware check** (decided 2026-07-26). See
+  §4b of `PLAN_R10_FIRMWARE_MANAGER.md`: OTA needs ESP32-S3 firmware >= 0.5.0,
+  and below that the fork's headline feature fails with a bare error code.
+  Report the version in `info`, refuse an OTA early with a clear message, and
+  ideally bundle `arduino-fwuploader` so the app can fix it. That layer needs
+  no DFU. The rest of R10 does not gate anything.
 - Release (§6 of `HANDOFF_NEXT_PHASES.md`): tag, GitHub Actions build,
   and only then the batched message to Rose (MATRIX Robotics) — team
   convention is one message for accumulated upgrades, not per feature.

@@ -75,6 +75,34 @@ If the RA4M1 can drive it, automation becomes possible.
 - whether the F103's UART bootloader is exposed to the RA4M1, which would allow
   a wireless MMLower update — the R10 stretch goal, also unpromised.
 
+## 4b. Release gate — the ESP32-S3 bridge version
+
+**Decision 2026-07-26: the release waits for this.** Not for all of R10 — for
+one piece of it.
+
+OTA needs bridge firmware **>= 0.5.0** (`startDownload`). Below that, "Send via
+WiFi" — the fork's headline feature — fails with a bare OTA error code. Someone
+installs the fork, tries the one thing it is being promoted for, sees a number,
+and concludes it is broken. That is a bad enough first impression to hold a
+release for.
+
+Minimum viable scope, much smaller than full R10:
+
+1. Report the bridge version. `WiFi.firmwareVersion()` on the hub, added to the
+   `info` frame next to the runtime version.
+2. **Check it before an OTA** and refuse early with a clear message naming the
+   version found and the version needed — rather than letting the upload fail
+   deep inside OTAUpdate.
+3. Offer the update: bundle `arduino-fwuploader` and run it from the app.
+   This layer needs **no DFU**.
+
+Steps 1 and 2 alone remove the bad first impression, and are small. Step 3 is
+the real convenience and is where the bundling work is.
+
+The rest of R10 — the four-version panel, the MMLower over DFU — does **not**
+gate the release. The current Firmware Update menu behaves exactly as the
+official app does there; it is not a regression this fork introduces.
+
 ## 5. Suggested order
 
 1. **In-app download from the official URL + checksum.** Delivers value on its
