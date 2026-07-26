@@ -51,6 +51,7 @@
             modalTitle:      'WiFi upload',
             searching:       'Searching for robots...',
             found:           '%d robot(s) found.',
+            notConnected:    'Not connected to a robot. Open the connection panel in the toolbar and connect first.',
             noneFound:       'No robot found. Check that the hub is on and on the same network (or connect to its MBR4-xxxx access point). The first search may also trigger a Windows Firewall prompt — allow access and try again.',
             refresh:         'Search again',
             cancel:          'Cancel',
@@ -107,6 +108,7 @@
             modalTitle:      'Envio via WiFi',
             searching:       'Procurando robôs...',
             found:           '%d robô(s) encontrado(s).',
+            notConnected:    'Sem conexão com um robô. Abra o painel de conexão na barra e conecte primeiro.',
             noneFound:       'Nenhum robô encontrado. Confira se o hub está ligado e na mesma rede (ou conecte-se ao ponto de acesso MBR4-xxxx dele). A primeira busca também pode disparar o aviso do Firewall do Windows — permita o acesso e tente de novo.',
             refresh:         'Buscar de novo',
             cancel:          'Cancelar',
@@ -532,6 +534,10 @@
     let busy = false;
 
     async function uploadTo(robot, ui) {
+        // Same guard as the VM path: the target now comes from the shared
+        // connection, so "no robot" is a normal state to report, not a crash.
+        robot = robot || (window.MBR4Hud && window.MBR4Hud.currentRobot());
+        if (!robot) throw new Error(tr('notConnected'));
         const t0 = Date.now();
 
         ui.phase(tr('phase_generate'));
@@ -547,20 +553,21 @@
         ui.log(fmt(tr('otaSize'), ota.length, Math.round((ota.length / bin.length) * 100)), 'ok');
 
         ui.phase(fmt(tr('phase_send'), robot.name || robot.ip));
-        const client = new RobotClient(robot.ip);
-        try {
-            await client.connect(4000);
-        } catch (e) {
-            throw new Error(fmt(tr('connectFail'), robot.ip, TCP_COMMAND_PORT, e.message));
-        }
+        // Uses the shared socket the connection manager owns. This used to
+        // open its own RobotClient, which meant pausing the HUD first because
+        // the runtime accepts exactly one client — the contention that
+        // MBR4Hud.pause()/resume() existed to referee.
+        const hud = window.MBR4Hud;
+        if (!hud || !hud.isConnected()) throw new Error(tr('notConnected'));
 
         let httpHandle = null;
+        let offFrames  = null;   // must outlive the try: `finally` unsubscribes
         try {
-            await client.request({ t: 'ping' }, (o) => o.t === 'pong', 4000);
+            await hud.request({ t: 'ping' }, (o) => o.t === 'pong', 4000);
 
             ui.phase(tr('phase_serve'));
             httpHandle = await serveFile(ota, robot.ip);
-            const myIp = client.localAddress;
+            const myIp = hud.localAddress();
             const url = 'http://' + myIp + ':' + httpHandle.port + httpHandle.urlPath;
 
             // Stream OTA status into the modal. The apply phase ends with the
@@ -569,7 +576,7 @@
             let lastPhase = '';
             let otaFailed = null;
             const statusDone = new Promise((resolveStatus) => {
-                client.onFrame = (o) => {
+                offFrames = hud.onFrame((o) => {
                     if (o.t !== 'ota_status') return;
                     lastPhase = o.phase;
                     if (o.phase === 'download') {
@@ -583,11 +590,16 @@
                         otaFailed = o;
                         resolveStatus();
                     }
-                };
-                client.onClose = () => resolveStatus();
+                });
+                // The apply phase ends with the hub rebooting, which drops the
+                // socket. On the shared connection the HUD reconnects on its
+                // own, so instead of listening for a close we bound the wait:
+                // 'apply' is the success signal, and this stops a lost frame
+                // from hanging the dialog forever.
+                setTimeout(resolveStatus, 120000);
             });
 
-            client.send({
+            hud.send({
                 t: 'ota',
                 url,
                 size: ota.length,
@@ -603,7 +615,7 @@
                 throw new Error('connection lost during ' + (lastPhase || 'setup'));
             }
         } finally {
-            client.close();
+            if (offFrames) { try { offFrames(); } catch (_) {} }
         }
 
         // Reboot + re-announce. The modem keeps the .ota; flashing takes a
@@ -625,11 +637,10 @@
     async function sendViaWiFi(robot, ui) {
         if (busy) return;
         busy = true;
-        // Runtime is single-client: the HUD (if connected) is holding the
-        // only TCP slot. Ask it to yield until this upload finishes; the
-        // HUD auto-reconnects after resume(). Skipping this makes every
-        // upload fail with "connect timeout" while the HUD is running.
-        if (window.MBR4Hud) await window.MBR4Hud.pause();
+        // No pause/resume any more: the upload rides the same socket the HUD
+        // holds, so there is nothing to yield. Telemetry keeps flowing during
+        // the transfer, which is a bonus — the dashboard no longer goes blank
+        // for the twenty seconds an OTA takes.
         try {
             try {
                 await uploadTo(robot, ui);
@@ -644,7 +655,6 @@
             ui.log((e && e.message) || String(e), 'error');
         } finally {
             busy = false;
-            if (window.MBR4Hud) window.MBR4Hud.resume();
         }
     }
 
@@ -844,25 +854,18 @@
 
         const ui = modalUi();
         const doCommand = async (cmd, matchCmd) => {
-            // Same single-client contract as sendViaWiFi: the HUD has to
-            // release its TCP slot before we can save name/wifi/appPass or
-            // send factory/reboot commands. For reboot in particular the
-            // robot will drop everything anyway, and the HUD will
-            // rediscover after resume().
-            if (window.MBR4Hud) await window.MBR4Hud.pause();
-            const client = new RobotClient(robot.ip);
+            // Rides the shared socket. No pause/resume: there is one client
+            // now, so there is nothing to hand the slot back and forth.
+            const hud = window.MBR4Hud;
+            if (!hud || !hud.isConnected()) { ui.log(tr('notConnected'), 'error'); return false; }
             try {
-                await client.connect(4000);
-                const rsp = await client.request(cmd,
+                const rsp = await hud.request(cmd,
                     (o) => o.t === 'ack' && o.cmd === matchCmd, 5000);
                 ui.log(rsp.ok ? tr('saved') : tr('saveFail'), rsp.ok ? 'ok' : 'error');
                 return !!rsp.ok;
             } catch (e) {
                 ui.log(fmt(tr('connectFail'), robot.ip, TCP_COMMAND_PORT, e.message), 'error');
                 return false;
-            } finally {
-                client.close();
-                if (window.MBR4Hud) window.MBR4Hud.resume();
             }
         };
         document.getElementById('wifiCfgNameSave').addEventListener('click', async () => {

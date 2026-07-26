@@ -70,10 +70,15 @@ SSID the *computer* is on versus the one the robot broadcasts, the battery
 warning and a Start button when a robot is waiting; plus a Setup pane with the
 whole config form working over whichever link is up.
 
-**Still open:** converting the per-feature pickers (HUD, Send via WiFi, Send
-VM, debugger) to ask the manager for the current robot, deleting each picker
-as its consumer switches, and finally removing `MBR4Hud.pause()/resume()` once
-nothing competes for the TCP slot.
+**Also done 2026-07-25:** consumers converted. The uploaders and the settings
+dialog ride the shared socket, the per-dialog pickers are gone, and
+`pause()/resume()` is deleted (kept as no-ops for one release). Measured: a VM
+upload now runs with the HUD still connected and telemetry still flowing.
+
+**Still open:** one real "Send via WiFi" (OTA) on hardware. That path was
+converted but not exercised end to end — it is the riskiest shape, since it
+needs the PC's address on the robot's network and ends with the hub rebooting
+under the socket. Do this before relying on OTA.
 
 Full design: **`DESIGN_UNIFIED_CONNECTION.md`**.
 

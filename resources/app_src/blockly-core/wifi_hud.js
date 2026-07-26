@@ -1160,44 +1160,15 @@
         return robots[0];
     }
 
-    // Pause/resume: the runtime accepts one TCP client at a time; when the
-    // upload flow or settings dialog needs the socket, the HUD has to let
-    // go. wifi_upload.js awaits MBR4Hud.pause() before every RobotClient
-    // it opens and calls resume() when done. Without this, "Send via WiFi"
-    // and "Save name" fail with connect timeout because we're squatting
-    // on the only slot.
-    let hudPaused = false;
-    function pauseHud() {
-        hudPaused = true;
-        clearTimeout(reconnectTimer);
-        if (hudClient) {
-            // Detach onClose BEFORE close() — otherwise the async 'close'
-            // event schedules a stray reconnectTimer that survives resume's
-            // clearTimeout+overwrite (the timer's id is lost forever) and
-            // fires 5 s later, closing the socket resume just opened, whose
-            // onClose then schedules ANOTHER 5 s timer, ad infinitum. Cost
-            // me a full debug session; do not remove the null-out.
-            hudClient.onClose = null;
-            try { hudClient.close(); } catch (_) {}
-            hudClient = null;
-        }
-        hudConnected = false;
-        setHudAwaiting(true);
-        // Give the modem 250 ms to notice the FIN and release the accept
-        // slot before the caller tries to open its own socket. Empirical
-        // — shorter races the runtime's poll cadence occasionally.
-        return new Promise((r) => setTimeout(r, 250));
-    }
-    function resumeHud() {
-        if (!hudPaused) return;
-        hudPaused = false;
-        // Small delay lets any lingering caller-side socket close cleanly
-        // before we re-attach.
-        reconnectTimer = setTimeout(connectLoop, 800);
-    }
+    // pauseHud()/resumeHud() lived here. The runtime accepts one TCP client,
+    // so every module that wanted the socket used to make the HUD let go and
+    // then hand it back — a dance that produced the reconnect-timer cascade
+    // fixed in b9e4ca2 and left the dashboard blank for the twenty seconds an
+    // OTA takes. Since the uploaders, the settings dialog and the debugger all
+    // ride this one socket now, there is nothing left to referee and the whole
+    // mechanism is gone. Do not reintroduce a second client.
 
     async function connectLoop() {
-        if (hudPaused) return;
         clearTimeout(reconnectTimer);
         if (hudClient) {
             // Same rationale as pauseHud: detach so this deliberate close
@@ -1424,8 +1395,10 @@
 
     // Exposed for e2e tests and for wifi_upload.js coordination.
     window.MBR4Hud = {
-        pause:  pauseHud,     // await this before opening your own RobotClient
-        resume: resumeHud,    // call this when done — HUD auto-reconnects
+        // pause/resume kept as no-ops for one release: they are gone, but an
+        // old cached asar or a stray probe calling them should not throw.
+        pause:  () => Promise.resolve(),
+        resume: () => {},
 
         // --- Shared-socket API (see the bus above) --------------------------
         /** Send an NDJSON object on the HUD's socket. false = not connected. */
@@ -1456,6 +1429,25 @@
         /** The robot this socket is attached to, or null. */
         currentRobot: () => (hudConnected ? hudRobot : null),
         /**
+         * This computer's address on the robot's network. The OTA flow needs
+         * it to build the URL the modem will fetch the image from, and taking
+         * it from the live socket is the only way to be right when the PC has
+         * several interfaces.
+         */
+        localAddress: () => {
+            try { return hudClient && hudClient.localAddress; } catch (_) { return null; }
+        },
+        /** Await a matching frame on the shared socket. */
+        request: (obj, match, timeoutMs) => new Promise((resolve, reject) => {
+            if (!hudConnected) { reject(new Error('not connected')); return; }
+            const to = setTimeout(() => { off(); reject(new Error('timeout')); },
+                                  timeoutMs || 6000);
+            const off = window.MBR4Hud.onFrame((o) => {
+                if (match(o)) { clearTimeout(to); off(); resolve(o); }
+            });
+            try { hudClient.send(obj); } catch (e) { clearTimeout(to); off(); reject(e); }
+        }),
+        /**
          * Point the single TCP slot at a specific robot (by mac suffix) and
          * reconnect. Exposed so the unified connection panel can own robot
          * choice without opening a second client — the runtime accepts one,
@@ -1472,7 +1464,7 @@
         _parseTelemetryFrame: parseTelemetryFrame,
         _mounted:  () => hudMounted,
         _connected:() => hudConnected,
-        _paused:   () => hudPaused,
+        _paused:   () => false,
         _openPicker: openHudPicker,
         // Legacy alias of send() kept for the existing probe scripts
         // (r3_hud_probe and friends call _send).

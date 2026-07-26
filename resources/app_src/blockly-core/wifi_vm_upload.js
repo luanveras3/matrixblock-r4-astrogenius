@@ -22,16 +22,31 @@
  *   {"t":"vm_stop"}                    → halt VM (userLoop takes back over)
  *   {"t":"vm_forget"}                  → drop the persisted copy
  *
- * Coordination: same pause/resume dance as OTA — window.MBR4Hud.pause()
- * releases the runtime's single TCP slot, we upload, resume() re-attaches
- * the HUD to see the VM's live state.
+ * Transport: the shared socket owned by the connection manager. This module
+ * used to open its own RobotClient and fight the HUD for the runtime's single
+ * TCP slot, refereed by MBR4Hud.pause()/resume(); riding the one connection
+ * removes the contention instead of scheduling around it, and the robot is
+ * chosen once in the connection panel rather than again in every dialog.
  */
 (function () {
     if (!window.MBR4WiFi) {
         console.warn('[VM] MBR4WiFi API not present — wifi_upload.js must load first.');
         return;
     }
-    const { RobotClient, discover } = window.MBR4WiFi;
+    // No private RobotClient any more: the runtime accepts ONE TCP client and
+    // this module used to fight the HUD for it, which is what MBR4Hud.pause()/
+    // resume() existed to referee. Everything now rides the shared socket the
+    // connection manager owns.
+    function link() { return window.MBR4Hud; }
+    function connectedRobot() {
+        const h = link();
+        return h && h.isConnected() ? h.currentRobot() : null;
+    }
+    function req(obj, match, ms) {
+        const h = link();
+        if (!h || !h.isConnected()) return Promise.reject(new Error(tr('notConnected')));
+        return h.request(obj, match, ms);
+    }
 
     // Firmware ceiling: MiniR4WiFiRuntime.cpp VM_MAX_PROGRAM (3584). Keep
     // both in sync when changing either — the size check here is the
@@ -75,6 +90,9 @@
             forget:          'Forget saved',
             forgotOK:        'The robot forgot its saved program.',
             forgetFail:      'Could not clear the saved program (%s).',
+            notConnected:    'Not connected to a robot. Open the connection panel in the toolbar and connect first.',
+            targetIs:        'Sending to',
+            changeRobot:     'Change robot',
         },
         'pt-BR': {
             btnLabel:        'Enviar VM (rápido)',
@@ -108,6 +126,9 @@
             forget:          'Esquecer',
             forgotOK:        'O robô esqueceu o programa guardado.',
             forgetFail:      'Não consegui apagar o programa guardado (%s).',
+            notConnected:    'Sem conexão com um robô. Abra o painel de conexão na barra e conecte primeiro.',
+            targetIs:        'Enviando para',
+            changeRobot:     'Trocar robô',
         },
     };
     function locale() {
@@ -182,6 +203,11 @@
     }
 
     async function sendVmTo(robot, ui) {
+        // Guard rather than trust the caller: with the picker gone the robot
+        // comes from the shared connection, which can legitimately be absent.
+        // Saying so is the useful behaviour; throwing on `robot.name` is not.
+        robot = robot || connectedRobot();
+        if (!robot) { ui.log(tr('notConnected'), 'error'); return; }
         const t0 = Date.now();
         ui.phase(tr('phase_compile'));
         let compiled;
@@ -211,17 +237,9 @@
         }
 
         ui.phase(fmt(tr('phase_send'), bytes.length, robot.name || robot.ip));
-        const client = new RobotClient(robot.ip);
-        try {
-            await client.connect(4000);
-        } catch (e) {
-            ui.log(fmt(tr('connectFail'), robot.ip, e.message), 'error');
-            return;
-        }
-
         try {
             // vm_start
-            const startAck = await client.request(
+            const startAck = await req(
                 { t: 'vm_start', size: bytes.length },
                 (o) => o.t === 'ack' && o.cmd === 'vm_start', 4000);
             if (!startAck.ok) throw new Error('vm_start rejected: ' + (startAck.err || ''));
@@ -232,7 +250,7 @@
                 const b64   = bytesToB64(slice);
                 let ack;
                 try {
-                    ack = await client.request(
+                    ack = await req(
                         { t: 'vm_chunk', d: b64 },
                         (o) => o.t === 'ack' && o.cmd === 'vm_chunk', 3000);
                 } catch (e) {
@@ -250,7 +268,7 @@
             // ack echoes "saved" so we can tell the user it really landed
             // (a dataflash write can fail where the transfer succeeded).
             ui.phase(tr('phase_run'), 100);
-            const endAck = await client.request(
+            const endAck = await req(
                 { t: 'vm_end', run: true, save: saveOnRobot },
                 (o) => o.t === 'ack' && (o.cmd === 'vm_end' || o.cmd === 'vm_run'), 6000);
             if (!endAck.ok) throw new Error('vm_end rejected: ' + (endAck.err || ''));
@@ -264,23 +282,18 @@
             ui.log(fmt(tr('done'), bytes.length, dtMs, bps), 'ok');
         } catch (e) {
             ui.log(e.message || String(e), 'error');
-        } finally {
-            client.close();
         }
     }
 
     async function stopVmOn(robot, ui) {
-        const client = new RobotClient(robot.ip);
+        robot = robot || connectedRobot();
         try {
-            await client.connect(4000);
-            const ack = await client.request({ t: 'vm_stop' },
-                (o) => o.t === 'ack' && o.cmd === 'vm_stop', 3000);
+            const ack = await req({ t: 'vm_stop' },
+                (o) => o.t === 'ack' && o.cmd === 'vm_stop', 4000);
             ui.log(ack.ok ? tr('stopped') : fmt(tr('stopFail'), ack.err || ''),
                    ack.ok ? 'ok' : 'error');
         } catch (e) {
             ui.log(fmt(tr('stopFail'), e.message), 'error');
-        } finally {
-            client.close();
         }
     }
 
@@ -289,17 +302,14 @@
     // "stop what it is doing now" and "stop doing this every time you turn
     // on" are different intents and get different buttons.
     async function forgetVmOn(robot, ui) {
-        const client = new RobotClient(robot.ip);
+        robot = robot || connectedRobot();
         try {
-            await client.connect(4000);
-            const ack = await client.request({ t: 'vm_forget' },
-                (o) => o.t === 'ack' && o.cmd === 'vm_forget', 4000);
+            const ack = await req({ t: 'vm_forget' },
+                (o) => o.t === 'ack' && o.cmd === 'vm_forget', 5000);
             ui.log(ack.ok ? tr('forgotOK') : fmt(tr('forgetFail'), ack.err || ''),
                    ack.ok ? 'ok' : 'error');
         } catch (e) {
             ui.log(fmt(tr('forgetFail'), e.message), 'error');
-        } finally {
-            client.close();
         }
     }
 
@@ -434,14 +444,12 @@
         document.getElementById('vmRobotList').style.display = 'none';
         document.getElementById('vmSaveRow').style.display = 'none';
         document.getElementById('vmProgressWrap').style.display = 'none';
-        if (window.MBR4Hud) await window.MBR4Hud.pause();
         try {
             await action(robot, ui);
         } catch (e) {
             ui.log((e && e.message) || String(e), 'error');
         } finally {
             busy = false;
-            if (window.MBR4Hud) window.MBR4Hud.resume();
             const list = document.getElementById('vmRobotList');
             if (list) list.style.display = 'block';
             const saveRow = document.getElementById('vmSaveRow');
@@ -449,21 +457,32 @@
         }
     }
 
+    // No discovery here any more. Which robot we talk to is decided once, in
+    // the connection panel, and shown here so the user can see the target
+    // without being asked to choose it again. One less place to pick a robot
+    // is the whole point of the unified connection work.
     async function refreshList() {
         ensureModal();
         const list = document.getElementById('vmRobotList');
         const ui   = modalUi();
         list.innerHTML = '';
         list.style.display = 'block';
-        ui.log(tr('searching'));
-        // Same coordination: pause HUD during discovery to keep the modem's
-        // UDP responses uncluttered by our own telemetry stream noise. Not
-        // strictly required (UDP != TCP slot) but keeps things predictable.
-        const robots = await discover(1800);
-        list.innerHTML = '';
-        if (!robots.length) { ui.log(tr('noneFound'), 'error'); return; }
-        robots.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        for (const r of robots) list.appendChild(robotRow(r));
+        const robot = connectedRobot();
+        if (!robot) {
+            ui.log(tr('notConnected'), 'error');
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.textContent = tr('changeRobot');
+            open.style.cssText =
+                'padding:6px 14px;border:1px solid #0ea5e9;background:#fff;color:#0ea5e9;' +
+                'border-radius:4px;cursor:pointer;';
+            open.addEventListener('click', () => {
+                if (window.MBR4Connection) window.MBR4Connection.open();
+            });
+            list.appendChild(open);
+            return;
+        }
+        list.appendChild(robotRow(robot));
     }
 
     function openModal() {
