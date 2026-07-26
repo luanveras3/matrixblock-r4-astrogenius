@@ -227,6 +227,8 @@ static int32_t _beginI2C(PORT& p, uint8_t sensor)
         case 1: return p.MXColorV3.begin() ? 1 : 0;
         case 2: return p.MXLaser.begin()   ? 1 : 0;
         case 3: return p.MXColor.begin()   ? 1 : 0;
+        case 4: return p.MXGesture.begin() == 0 ? 1 : 0;   // 0 = success
+        case 5: p.HTCol.begin(); return 1;                 // void, no status
         default: return 0;
     }
 }
@@ -244,6 +246,15 @@ static int32_t _readI2C(PORT& p, uint8_t sensor, uint8_t fn)
                 case 2: return p.MXColor.getColor((ColorType)2);
                 case 4: return p.MXColor.getGrayscale();
                 default: return p.MXColor.getColorNumber_Deprecated();
+            }
+        case 3:   // MXGesture — one code per gesture, 0 = none
+            return p.MXGesture.getGesture();
+        case 4:   // HT Colour V2
+            switch (fn) {
+                case 0:  return p.HTCol.getR();
+                case 1:  return p.HTCol.getG();
+                case 2:  return p.HTCol.getB();
+                default: return p.HTCol.getColorNumber();
             }
         case 2:   // MXLineTracer
             switch (fn) {

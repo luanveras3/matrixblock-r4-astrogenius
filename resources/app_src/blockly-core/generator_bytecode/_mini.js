@@ -378,8 +378,8 @@ goog.require('Blockly.BytecodeVM');
     G['mini_i2c_MXcolor_begin']   = function () { return i2cBegin(this, 3); };
     // No bring-up implemented for these yet; emitting nothing is honest —
     // their read blocks are the ones that would fail, not this.
-    ['mini_i2c_MXGesture_begin', 'mini_i2c_HTcolor_begin',
-     'mini_i2c_mxlinetracer_begin'].forEach((t) => { G[t] = function () { return ''; }; });
+    // Line tracer needs no bring-up call in the driver.
+    G['mini_i2c_mxlinetracer_begin'] = function () { return ''; };
 
     G['mini_i2c_MXlaser_getDistance'] = function () { return i2cRead(this, 0, 0); };
 
@@ -502,4 +502,30 @@ goog.require('Blockly.BytecodeVM');
     G['mini_Serial_read']       = function () { return serialIn(this, 0, 1); };
     G['mini_Serial1_available'] = function () { return serialIn(this, 1, 0); };
     G['mini_Serial1_read']      = function () { return serialIn(this, 1, 1); };
+
+    // --- Round 4f: gesture and HT colour ------------------------------------
+    // Both drivers are already members of MiniR4.I2C1..I2C4, so these reuse
+    // the generic I2C opcodes and cost no static RAM — which is the only
+    // reason they fit at all, with 164 bytes left in the budget.
+    G['mini_i2c_MXGesture_begin'] = function () { return i2cBegin(this, 4); };
+    G['mini_i2c_HTcolor_begin']   = function () { return i2cBegin(this, 5); };
+
+    G['mini_i2c_MXGesture_getGesture'] = function () { return i2cRead(this, 3, 0); };
+    // The "is gesture X?" form compares the reading against the block's own
+    // gesture code, so the whole test stays inside the VM.
+    G['mini_i2c_MXGesture_getGesture_equals'] = function () {
+        const raw = String(this.getFieldValue('GESTURE') || '0');
+        const map = { RIGHT:1, LEFT:2, UP:4, DOWN:8, FORWARD:16, BACKWARD:32,
+                      CLOCKWISE:64, ANTICLOCKWISE:128 };
+        const code = map[raw.toUpperCase()] !== undefined
+            ? map[raw.toUpperCase()] : (parseInt(raw, 10) || 0);
+        const read = i2cRead(this, 3, 0)[0];
+        return [read + G.pushInt(code) + G.byte(G.OPS.EQ), G.ORDER_ATOMIC];
+    };
+
+    G['mini_i2c_HTcolor_get'] = function () {
+        const map = { R:0, G:1, B:2, RED:0, GREEN:1, BLUE:2 };
+        const raw = String(this.getFieldValue('COLOR') || '').toUpperCase();
+        return i2cRead(this, 4, map[raw] !== undefined ? map[raw] : 3);
+    };
 })();
