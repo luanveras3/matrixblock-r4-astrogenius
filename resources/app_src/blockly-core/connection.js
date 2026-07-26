@@ -99,6 +99,11 @@
             battCrit:    'Battery is very low (%s V). Charge the hub before using WiFi.',
             factoryWarn: 'Factory reset clears the name, the stored WiFi, the AP password and any saved program. The robot\'s WiFi goes back to MBR4-%s / matrix2026. Continue?',
             via:         'via',
+            helpTitle:   'If something goes wrong',
+            helpFind:    '<b>Cannot find the robot?</b> Check the network your computer is on against the one the robot broadcasts, shown above — they must match. A rename only reaches the WiFi name after the robot is restarted.',
+            helpStuck:   '<b>Robot not responding at all?</b> Hold <b>BTN_UP</b> while switching it on. It starts in rescue mode, ignoring the stored program, and can always be reprogrammed.',
+            helpReset:   '<b>Forgot the WiFi password, or want a clean slate?</b> Hold <b>BTN_UP + BTN_DOWN</b> together while switching it on. That clears the name, the stored network, the AP password and any saved program — no computer needed. The button below does the same thing.',
+            helpCable:   '<b>The USB cable always works</b>, even with WiFi off or misconfigured. Everything on this screen can be done through it.',
         },
         'pt-BR': {
             navTitle:    'Conexão — USB e WiFi',
@@ -161,6 +166,11 @@
             battCrit:    'Bateria muito baixa (%s V). Carregue o hub antes de usar WiFi.',
             factoryWarn: 'O reset de fábrica apaga o nome, a rede guardada, a senha do AP e qualquer programa guardado. O WiFi do robô volta a ser MBR4-%s / matrix2026. Continuar?',
             via:         'por',
+            helpTitle:   'Se algo der errado',
+            helpFind:    '<b>Não acha o robô?</b> Compare a rede em que seu computador está com a que o robô transmite, mostrada acima — elas precisam ser a mesma. Renomear só muda o nome do WiFi do robô depois que ele reinicia.',
+            helpStuck:   '<b>Robô não responde de jeito nenhum?</b> Segure <b>BTN_UP</b> enquanto liga. Ele entra em modo de resgate, ignorando o programa gravado, e sempre pode ser reprogramado.',
+            helpReset:   '<b>Esqueceu a senha do WiFi, ou quer começar do zero?</b> Segure <b>BTN_UP + BTN_DOWN</b> juntos enquanto liga. Isso apaga o nome, a rede guardada, a senha do AP e qualquer programa guardado — sem precisar de computador. O botão abaixo faz o mesmo.',
+            helpCable:   '<b>O cabo USB sempre funciona</b>, mesmo com o WiFi desligado ou mal configurado. Tudo desta tela pode ser feito por ele.',
         },
     };
     function locale() {
@@ -450,6 +460,13 @@
                sec(tr('secAp'),
                    field('connApPass', tr('fApPass'), '', tr('apHint')) +
                    '<button id="connSaveAp" type="button" class="connBtnPrimary">' + esc(tr('save')) + '</button>') +
+               sec(tr('helpTitle'),
+                   '<div style="font-size:12px;color:#475569;line-height:1.5;">' +
+                     '<p style="margin:0 0 7px;">' + tr('helpFind')  + '</p>' +
+                     '<p style="margin:0 0 7px;">' + tr('helpStuck') + '</p>' +
+                     '<p style="margin:0 0 7px;">' + tr('helpReset') + '</p>' +
+                     '<p style="margin:0;">'       + tr('helpCable') + '</p>' +
+                   '</div>') +
                sec(tr('secActions'),
                    '<button id="connRadioOff" type="button" class="connBtn">' + esc(tr('radioOff')) + '</button> ' +
                    '<button id="connForgetVm" type="button" class="connBtn">' + esc(tr('forgetVm')) + '</button> ' +
