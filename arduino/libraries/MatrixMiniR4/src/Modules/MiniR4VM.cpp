@@ -201,6 +201,20 @@ MiniR4VM::Result MiniR4VM::execLogic(VMOp op)
         default: return Result::OK; \
     }
 
+// Each I2C port is a distinct template instantiation of MiniR4I2C, so the
+// port switch cannot share a pointer — a template keeps the four cases from
+// becoming four copies of the channel logic.
+template <typename PORT>
+static int32_t _readColor(PORT& p, uint8_t channel)
+{
+    switch (channel) {
+        case 0:  return p.MXColorV3.getR();
+        case 1:  return p.MXColorV3.getG();
+        case 2:  return p.MXColorV3.getB();
+        default: return p.MXColorV3.getColorID();
+    }
+}
+
 MiniR4VM::Result MiniR4VM::execIO(VMOp op)
 {
     int32_t a, b, c, d;
@@ -561,6 +575,58 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
             if (!pop(a)) return Result::ERR_STACK_UNDERFLOW;
             randomSeed((unsigned long)a);
             return Result::OK;
+
+        case VMOp::MAP: {   // pop toHi,toLo,frHi,frLo,v -> push mapped
+            int32_t toHi, toLo, frHi, frLo, v;
+            if (!pop(toHi) || !pop(toLo) || !pop(frHi) || !pop(frLo) || !pop(v))
+                return Result::ERR_STACK_UNDERFLOW;
+            // Arduino's map() divides by (frHi - frLo); guard it rather than
+            // trap, so a badly-wired block cannot kill the whole program.
+            const int32_t span = frHi - frLo;
+            const int32_t out  = (span == 0) ? toLo
+                               : (v - frLo) * (toHi - toLo) / span + toLo;
+            return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::I2C_LASER: {   // pop port -> push mm
+            int32_t port;
+            if (!pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            int32_t mm = -1;
+            switch ((uint8_t)port) {
+                case 1: mm = MiniR4.I2C1.MXLaserV2.getDistance(); break;
+                case 2: mm = MiniR4.I2C2.MXLaserV2.getDistance(); break;
+                case 3: mm = MiniR4.I2C3.MXLaserV2.getDistance(); break;
+                case 4: mm = MiniR4.I2C4.MXLaserV2.getDistance(); break;
+            }
+            return push(mm) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::I2C_COLOR: {   // pop channel, port -> push component
+            int32_t ch, port;
+            if (!pop(ch) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            int32_t out = 0;
+            switch ((uint8_t)port) {
+                case 1: out = _readColor(MiniR4.I2C1, (uint8_t)ch); break;
+                case 2: out = _readColor(MiniR4.I2C2, (uint8_t)ch); break;
+                case 3: out = _readColor(MiniR4.I2C3, (uint8_t)ch); break;
+                case 4: out = _readColor(MiniR4.I2C4, (uint8_t)ch); break;
+            }
+            return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::OLED_TEXTSIZE: {
+            int32_t v;
+            if (!pop(v)) return Result::ERR_STACK_UNDERFLOW;
+            MiniR4.OLED.setTextSize((uint8_t)v);
+            return Result::OK;
+        }
+
+        case VMOp::OLED_TEXTCOLOR: {
+            int32_t v;
+            if (!pop(v)) return Result::ERR_STACK_UNDERFLOW;
+            MiniR4.OLED.setTextColor((uint16_t)v);
+            return Result::OK;
+        }
 
         case VMOp::ROUND: // no-op for int; here to keep bytecode stable when floats arrive
             return Result::OK;

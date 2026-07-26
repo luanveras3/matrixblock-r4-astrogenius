@@ -161,6 +161,17 @@ enum class VMOp : uint8_t {
     MOTOR_SETPPR  = 0xEF, ///< pop maxRPM, ppr, id   (M<id>.setPPR_RPM)
     RANDOM_SEED   = 0xF0, ///< pop seed
     ROUND         = 0xF1, ///< pop v -> push v  (no-op for int; reserved for float)
+
+    // --- Round 4: utilities + I2C sensors ---------------------------------
+    // The I2C drivers (MXLaserV2, MXColorV3, ...) are already members of
+    // MiniR4.I2C1..I2C4, which the runtime instantiates anyway — so these
+    // handlers cost flash only, not the static RAM that is nearly exhausted.
+    MAP           = 0xF2, ///< pop toHi,toLo,frHi,frLo,v -> push mapped
+    I2C_LASER     = 0xF3, ///< pop port(1..4) -> push distance mm
+    I2C_COLOR     = 0xF4, ///< pop channel, port -> push component
+                          ///< channel 0=R 1=G 2=B 3=colorID
+    OLED_TEXTSIZE = 0xC4, ///< pop size
+    OLED_TEXTCOLOR= 0xC5, ///< pop color(0/1)
 };
 
 /**

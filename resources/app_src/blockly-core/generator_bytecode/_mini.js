@@ -289,4 +289,64 @@ goog.require('Blockly.BytecodeVM');
             'Matrix A-port analog read not yet mapped to a VM pin id.');
         return [G.pushInt(0), G.ORDER_ATOMIC];
     };
+
+    // "I2C1".."I2C4" -> 1..4. Anything else warns and targets port 1 rather
+    // than emitting a wild port number the firmware would silently ignore.
+    function i2cPort(field, blockType) {
+        const m = /([1-4])/.exec(String(field || ''));
+        if (!m) { G.warn(blockType, 'unknown I2C port: ' + field); return 1; }
+        return parseInt(m[1], 10);
+    }
+
+    // ---------------------------------------------------------------------
+    // Round 4 — utilities and I2C sensors.
+    // The I2C drivers already live inside MiniR4.I2C1..I2C4, so these cost
+    // firmware flash but no static RAM, which is what made them affordable.
+    // ---------------------------------------------------------------------
+
+    // map(value, fromLow, fromHigh, toLow, toHigh)
+    G['mini_map'] = function () {
+        const v  = G.valueToCode(this, 'VAL',  G.ORDER_ATOMIC) || G.pushInt(0);
+        const fl = G.valueToCode(this, 'frmL', G.ORDER_ATOMIC) || G.pushInt(0);
+        const fh = G.valueToCode(this, 'frmH', G.ORDER_ATOMIC) || G.pushInt(0);
+        const tl = G.valueToCode(this, 'toL',  G.ORDER_ATOMIC) || G.pushInt(0);
+        const th = G.valueToCode(this, 'toH',  G.ORDER_ATOMIC) || G.pushInt(0);
+        // Pushed in the order the opcode pops them in reverse: v, fl, fh, tl, th.
+        return [v + fl + fh + tl + th + G.byte(G.OPS.MAP), G.ORDER_ATOMIC];
+    };
+
+    // I2C laser distance. begin() is a no-op here: the runtime already
+    // constructs the driver, and emitting nothing keeps a "begin" block from
+    // being reported as unsupported.
+    G['mini_i2c_MXLaserV2_begin'] = function () { return ''; };
+    G['mini_i2c_MXLaserV2_getDistance'] = function () {
+        const port = i2cPort(this.getFieldValue('PIN'), 'mini_i2c_MXLaserV2_getDistance');
+        return [G.pushInt(port) + G.byte(G.OPS.I2C_LASER), G.ORDER_ATOMIC];
+    };
+
+    // I2C colour sensor. COLOR selects the component; anything we do not
+    // recognise falls back to the colour ID, which is what most programs use.
+    G['mini_i2c_MXcolorV3_begin'] = function () { return ''; };
+    G['mini_i2c_MXcolorV3_getColor'] = function () {
+        const port = i2cPort(this.getFieldValue('PIN'), 'mini_i2c_MXcolorV3_getColor');
+        const map  = { R: 0, G: 1, B: 2, RED: 0, GREEN: 1, BLUE: 2 };
+        const raw  = String(this.getFieldValue('COLOR') || '').toUpperCase();
+        const ch   = (map[raw] !== undefined) ? map[raw] : 3;
+        return [G.pushInt(port) + G.pushInt(ch) + G.byte(G.OPS.I2C_COLOR), G.ORDER_ATOMIC];
+    };
+
+    G['mini_OLED_setTextSize'] = function () {
+        const v = G.valueToCode(this, 'SIZE', G.ORDER_ATOMIC) || G.pushInt(1);
+        return v + G.byte(G.OPS.OLED_TEXTSIZE);
+    };
+    G['mini_OLED_setTextColor'] = function () {
+        const raw = String(this.getFieldValue('COLOR') || '1');
+        const v = /black|0/i.test(raw) ? 0 : 1;
+        return G.pushInt(v) + G.byte(G.OPS.OLED_TEXTCOLOR);
+    };
+
+    G['mini_randomSeed'] = function () {
+        const v = G.valueToCode(this, 'SEED', G.ORDER_ATOMIC) || G.pushInt(0);
+        return v + G.byte(G.OPS.RANDOM_SEED);
+    };
 })();
