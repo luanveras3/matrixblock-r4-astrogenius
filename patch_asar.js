@@ -38,6 +38,9 @@ const PATCHES = [
   ['blockly-core/wifi_vm_debug.js',                   'blockly-core/wifi_vm_debug.js'],
   // Unified connection manager (USB + WiFi in one surface).
   ['blockly-core/connection.js',                      'blockly-core/connection.js'],
+  // Groups this fork's navbar buttons into one dropdown (the stock bar is
+  // fixed-width and we overflowed it).
+  ['blockly-core/navmenu.js',                         'blockly-core/navmenu.js'],
   // Hub configuration over the USB cable — the path that does not depend on
   // the network being configured.
   ['blockly-core/usb_config.js',                      'blockly-core/usb_config.js'],

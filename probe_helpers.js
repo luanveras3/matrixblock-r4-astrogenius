@@ -63,6 +63,17 @@ function autoDismiss(win, intervalMs = 700, onDismiss) {
  * probe actually wants.
  */
 async function launchApp(electron, opts = {}) {
+    // The app is single-instance: a leftover window makes launch() return an
+    // process that immediately exits with "App already running!", and the
+    // probe fails for a reason that has nothing to do with what it tests.
+    // Leftovers happen whenever an earlier probe died before closeApp() —
+    // and they leave the user closing windows by hand, which is worse.
+    try {
+        require('child_process').execSync(
+            'taskkill /IM "MATRIXblock Mini R4.exe" /F', { stdio: 'ignore' });
+        await new Promise((r) => setTimeout(r, 1500));
+    } catch (e) { /* nothing running, which is the normal case */ }
+
     const app = await electron.launch({
         executablePath: 'C:/matrixblock-r4/MATRIXblock Mini R4.exe',
         timeout: opts.timeout || 20000,

@@ -115,6 +115,26 @@
 				filter: grayscale(60%) opacity(0.55);
 				transition: filter 0.2s;
 			}
+			/* Narrow windows: let the navbar wrap instead of running off the
+			   right edge. Measured before this rule — at a 900px window the
+			   left group (logo, badge, project name) took 603px and the
+			   button group 389px, so 92px were simply cut off, and nothing in
+			   the stock bar is responsive. Wrapping keeps every control
+			   reachable; the content area already positions itself from the
+			   measured navbar height, so a second row costs nothing but
+			   vertical space on a window that small. */
+			@media (max-width: 1100px) {
+				nav .container-fluid {
+					flex-wrap: wrap !important;
+					row-gap: 2px;
+				}
+				nav .container-fluid > #boardNav {
+					margin-left: 0 !important;
+					flex: 1 1 100%;
+					justify-content: flex-end;
+				}
+			}
+
 			/* Push content-Div below nav (53px) + tab bar (32px) */
 			.mainContainer { display: flex !important; flex-direction: column !important; height: 100vh !important; }
 			.content-Div {
@@ -518,6 +538,7 @@
 	<script type="text/javascript" src="../blockly-core/wifi_vm_debug.js"></script>
 	<script type="text/javascript" src="../blockly-core/usb_config.js"></script>
 	<script type="text/javascript" src="../blockly-core/connection.js"></script>
+	<script type="text/javascript" src="../blockly-core/navmenu.js"></script>
 	<!--
 		AstroGenius extensions for MATRIXblock Mini R4:
 		  - Tab manager (multiple projects open simultaneously)
