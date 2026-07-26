@@ -44,6 +44,7 @@
             usb:         'USB cable',
             wifi:        'WiFi',
             noCable:     'no cable',
+            cableIdle:   'cable connected, no link open',
             usbHint:     'The cable link is held only while this window is open, so it never blocks a USB upload.',
             notConnected:'not connected',
             searching:   'Searching...',
@@ -111,6 +112,7 @@
             usb:         'Cabo USB',
             wifi:        'WiFi',
             noCable:     'sem cabo',
+            cableIdle:   'cabo conectado, sem link aberto',
             usbHint:     'A conexão pelo cabo fica ativa só enquanto esta janela está aberta, para nunca atrapalhar um envio por USB.',
             notConnected:'não conectado',
             searching:   'Procurando...',
@@ -230,7 +232,12 @@
 
     // --- State -------------------------------------------------------------
     const state = {
-        usb:  null,   // { link, info, path, baud }
+        usb:  null,   // { link, info, path, baud } — an OPEN link to our runtime
+        // A port the OS can see. Separate from `usb` on purpose: a cable can be
+        // plugged in with no link open, which is in fact the normal state — the
+        // link is only held while the panel is open so it never blocks an
+        // upload. Reporting "no cable" for that was simply wrong.
+        port: null,   // { path, label }
         wifi: null,   // { robot, info }  — the HUD owns the socket
         robots: [],   // last WiFi discovery
         pcSsid: null, // SSID the computer is joined to
@@ -338,12 +345,16 @@
 
     function renderIndicator() {
         if (!indicatorEl) return;
-        const usbLabel  = state.usb ? state.usb.path : tr('noCable');
+        // The lamp answers "is the cable in?", which is what anyone reads it
+        // as — not "is our serial link open right now?", which is transient by
+        // design and would read as unplugged nearly all the time.
+        const path = (state.usb && state.usb.path) || (state.port && state.port.path);
+        const usbLabel  = path || tr('noCable');
         const wifiLabel = wifiUp()
             ? ((window.MBR4Hud.currentRobot() || {}).name || tr('connected'))
             : tr('notConnected');
         indicatorEl.innerHTML =
-            lamp(!!state.usb, usbLabel) + lamp(wifiUp(), wifiLabel);
+            lamp(!!path, usbLabel) + lamp(wifiUp(), wifiLabel);
         indicatorEl.title = tr('navTitle');
     }
 
@@ -387,7 +398,12 @@
             ? '<div style="font-size:13px;margin-top:4px;">' + lamp(true, state.usb.path) +
               esc((state.usb.info && state.usb.info.name) || '') + ' · ' +
               state.usb.baud + ' baud</div>'
-            : '<div style="font-size:13px;color:#64748b;margin-top:4px;">' + esc(tr('noCable')) + '</div>';
+            : state.port
+                ? '<div style="font-size:13px;margin-top:4px;">' +
+                  lamp(true, state.port.path) +
+                  '<span style="color:#64748b;">' + esc(tr('cableIdle')) + '</span></div>'
+                : '<div style="font-size:13px;color:#64748b;margin-top:4px;">' +
+                  esc(tr('noCable')) + '</div>';
         h += '<div style="font-size:11px;color:#94a3b8;margin-top:4px;">' + esc(tr('usbHint')) + '</div>';
         h += '</div>';
 
@@ -635,6 +651,37 @@
         render();
     }
 
+    /*
+     * Watch for a cable, without touching it.
+     *
+     * SerialPort.list() enumerates ports; it never opens one, so this is safe
+     * to run on a timer — opening a port is exactly what would block an
+     * arduino-cli upload, and avoiding that is why the real link is only held
+     * while the panel is open.
+     *
+     * The board is picked by the same manufacturer heuristic scanUsb() uses,
+     * falling back to whatever single port exists.
+     */
+    const PORT_POLL_MS = 3000;
+
+    function looksLikeBoard(p) {
+        return /arduino|renesas|wch|silicon|ftdi/i.test(
+            (p.manufacturer || '') + ' ' + (p.friendlyName || '') + ' ' + (p.vendorId || ''));
+    }
+
+    async function pollPorts() {
+        if (!SerialPort) return;
+        let ports = [];
+        try { ports = await SerialPort.list(); } catch (e) { ports = []; }
+        const pick = ports.find(looksLikeBoard) || (ports.length === 1 ? ports[0] : null);
+        const path = pick ? pick.path : null;
+        const had = state.port && state.port.path;
+        if (path === had) return;                 // nothing changed, no repaint
+        state.port = path ? { path, label: (pick.friendlyName || pick.manufacturer || '') } : null;
+        renderIndicator();
+        if (modalEl) render();
+    }
+
     // --- Navbar indicator ---------------------------------------------------
     // Attached to the element that already means "which device am I talking
     // to", so there is one place to look rather than five.
@@ -649,6 +696,8 @@
             e.preventDefault(); e.stopPropagation(); open();
         });
         host.parentNode.insertBefore(indicatorEl, host.nextSibling);
+        pollPorts();
+        setInterval(pollPorts, PORT_POLL_MS);
         renderIndicator();
     }
 
