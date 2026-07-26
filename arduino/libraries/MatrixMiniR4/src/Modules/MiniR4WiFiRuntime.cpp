@@ -37,6 +37,7 @@ constexpr uint32_t SERIAL_CONFIG_BAUD = 115200;
 constexpr const char* AP_PASSWORD     = "matrix2026";
 constexpr uint32_t STA_JOIN_TIMEOUT_MS  = 10000;  ///< per begin() attempt
 constexpr uint32_t STA_RETRY_INTERVAL_MS = 30000; ///< re-try cadence in poll()
+constexpr uint32_t TICK_INTERVAL_MS   = 5;        ///< real work cadence in tick()
 
 // --- Dataflash config record (block 6, magic 'MBRW') ------------------------
 // Erased flash reads 0xFF everywhere; missing magic = "no config, defaults".
@@ -287,6 +288,7 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _begun(false)
     , _nameCustom(false)
     , _lastStaRetryMs(0)
+    , _tickLastMs(0)
     , _lineLen(0)
     , _serialLen(0)
     , _replyToSerial(false)
@@ -302,6 +304,7 @@ MiniR4WiFiRuntimeClass::MiniR4WiFiRuntimeClass()
     , _vmReceiving(false)
     , _sketchId(0)
     , _vmStored(false)
+    , _inVm(false)
     , _vmDebugOn(false)
     , _vmPaused(false)
     , _vmStepOnce(false)
@@ -561,6 +564,17 @@ void MiniR4WiFiRuntimeClass::_pollVm()
 {
     if (!_vm.isRunning()) return;
 
+    // Re-entry guard. tick() steps the VM so a program sent while user code
+    // is parked actually runs, and tick() is reachable from user code that
+    // the VM itself may have resumed — one guard here is cheaper to reason
+    // about than auditing every path that can reach this function.
+    if (_inVm) return;
+    _inVm = true;
+    struct Guard {
+        bool* f;
+        ~Guard() { *f = false; }
+    } guard{ &_inVm };
+
     // Paused: keep reporting where we are (the IDE may have just connected
     // and needs to know which block is highlighted) but execute nothing.
     if (_vmPaused && !_vmStepOnce) {
@@ -698,6 +712,40 @@ bool MiniR4WiFiRuntimeClass::_forgetVmProgram()
     const bool ok = (g_flash.erase(VM_STORE_ADDR, DATAFLASH_BLOCK) == 0);
     if (ok) _vmStored = false;
     return ok;
+}
+
+bool MiniR4WiFiRuntimeClass::tick(bool cond)
+{
+    if (!_begun) return cond;
+
+    // Throttle: a `while (!button)` gate calls this as fast as the CPU can
+    // spin, and each discovery poll costs a modem transaction. Doing the real
+    // work on a 5 ms cadence matches what a normal loop() achieves anyway
+    // (the runtime example is poll() + delay(5)) while leaving the student's
+    // loop essentially free.
+    const uint32_t now = millis();
+    if (now - _tickLastMs < TICK_INTERVAL_MS) return cond;
+    _tickLastMs = now;
+
+    _pollSerial();
+    if (_netMode != NET_DOWN) {
+        _pollDiscovery();
+        _pollCommands();
+        _pollTelemetry();
+    }
+    // Advance the VM too. Without this, sending a VM program while the robot
+    // sits at its start gate loads it and never runs it: the driver's poll()
+    // is what normally steps the VM, and poll() is exactly what a blocked
+    // userLoop is not reaching. Since the gate is where a robot spends most
+    // of its idle life, "Send VM (fast)" would appear to do nothing most of
+    // the time.
+    //
+    // Not the recursion that blew the stack on the BLE branch (a9db855):
+    // that was DELAY_MS yielding back into the VM. The VM's yield callback is
+    // pollNetworkOnly(), which never steps, and _pollVm() guards re-entry, so
+    // the depth here is bounded at one.
+    _pollVm();
+    return cond;
 }
 
 void MiniR4WiFiRuntimeClass::safeDelay(uint32_t ms)

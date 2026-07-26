@@ -97,6 +97,32 @@ public:
     void safeDelay(uint32_t ms);
 
     /**
+     * @brief Keep the transports alive from inside a user loop.
+     *
+     * Returns `cond` unchanged so it can wrap a loop condition:
+     *
+     *     while (WiFiRuntime.tick(!MiniR4.BTN_UP.getState())) { }
+     *
+     * which is what the IDE wrapper rewrites every user `while` / `for` into.
+     *
+     * Why this exists: the runtime is cooperatively scheduled — poll() only
+     * runs when loop() comes back around. Student programs almost always open
+     * with a "wait until BTN_UP is pressed" gate (the board starts executing
+     * the moment it resets, so they need one), and that compiles to a bare
+     * busy-wait. Without this, the very first thing the typical program does
+     * is take the hub off the network, over WiFi *and* over USB.
+     *
+     * Self-throttling: a tight loop calls this tens of thousands of times a
+     * second, and every discovery poll is a modem transaction. Real work is
+     * done at most every TICK_INTERVAL_MS; other calls return immediately, so
+     * wrapping a loop costs the student nothing measurable.
+     *
+     * Never advances the VM — see pollNetworkOnly() for why re-entering it
+     * would blow the stack.
+     */
+    bool tick(bool cond = true);
+
+    /**
      * @brief Push a log line to the connected IDE (R3 — remote console).
      *
      * NDJSON frame `{"t":"log","s":"..."}` — appears in the HUD's Log tab.
@@ -265,6 +291,7 @@ private:
     char     _apPass[64];          ///< effective AP password (default or custom)
     bool     _apPassCustom;        ///< a user-set AP password exists in flash
     uint32_t _lastStaRetryMs;
+    uint32_t _tickLastMs;          ///< throttle for tick()
 
     // TCP line assembly (commands are small and flat; no ArduinoJson).
     char     _lineBuf[192];
@@ -310,6 +337,7 @@ private:
     bool     _vmReceiving;         ///< between vm_start and vm_end
     uint32_t _sketchId;            ///< identity of the running native sketch
     bool     _vmStored;            ///< a valid program sits in dataflash
+    bool     _inVm;                ///< re-entry guard for _pollVm()
     void _handleVmStart(long size);
     void _handleVmChunk(const char* b64);
     void _handleVmEnd(bool save);

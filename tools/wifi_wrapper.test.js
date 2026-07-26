@@ -163,6 +163,89 @@ check('print rewrite reaches the full sketch',
         '}',
     ].join('\n')).includes('WiFiRuntime.logPrintln(MiniR4.PWR.getVoltage())'));
 
+// --- 4c. blocking loops (the release-blocking bug) ---------------------------
+// Students gate their programs with "wait until BTN_UP", which compiles to a
+// bare busy-wait; without pumping the runtime from inside loops, the typical
+// program takes the hub off the network from boot.
+const L = A.__rewriteWifiLoops;
+
+// Note: the rewrite preserves the user's original spacing around the
+// keyword — the generated sketch stays as close to what the blocks emitted
+// as possible, so anyone reading it can still recognise their own program.
+check('wait-until busy-wait is pumped',
+    L('while(!MiniR4.BTN_UP.getState());') ===
+    'while(WiFiRuntime.tick(!MiniR4.BTN_UP.getState()));',
+    L('while(!MiniR4.BTN_UP.getState());'));
+check('loop with a body is pumped',
+    L('while (a < b) { x++; }') === 'while (WiFiRuntime.tick(a < b)) { x++; }',
+    L('while (a < b) { x++; }'));
+check('do-while is pumped',
+    L('do { x++; } while (x < 3);') === 'do { x++; } while (WiFiRuntime.tick(x < 3));',
+    L('do { x++; } while (x < 3);'));
+check('for condition is pumped',
+    L('for (int i = 0; i < 10; i++) { }') ===
+    'for (int i = 0;WiFiRuntime.tick(i < 10); i++) { }',
+    L('for (int i = 0; i < 10; i++) { }'));
+check('empty for condition becomes a tick',
+    L('for (;;) { }') === 'for (;WiFiRuntime.tick(); ) { }' ||
+    L('for (;;) { }') === 'for (;WiFiRuntime.tick();) { }',
+    L('for (;;) { }'));
+check('nested parens in the condition survive',
+    L('while (f(a, (b + c)) > 0) { }') ===
+    'while (WiFiRuntime.tick(f(a, (b + c)) > 0)) { }',
+    L('while (f(a, (b + c)) > 0) { }'));
+check('idempotent',
+    L(L('while (a) { }')) === L('while (a) { }'),
+    L(L('while (a) { }')));
+
+// The scanner exists for these: a regex would corrupt them.
+check('while inside a string literal untouched',
+    L('Serial.println("while (x) loop");') === 'Serial.println("while (x) loop");',
+    L('Serial.println("while (x) loop");'));
+check('for inside a string literal untouched',
+    L('OLED.print("for (i)");') === 'OLED.print("for (i)");',
+    L('OLED.print("for (i)");'));
+check('while inside a line comment untouched',
+    L('// while (a) spin\nx = 1;') === '// while (a) spin\nx = 1;',
+    L('// while (a) spin\nx = 1;'));
+check('while inside a block comment untouched',
+    L('/* while (a) { } */ y = 2;') === '/* while (a) { } */ y = 2;',
+    L('/* while (a) { } */ y = 2;'));
+check('paren inside a string does not break matching',
+    L('while (strcmp(s, ")") == 0) { }') ===
+    'while (WiFiRuntime.tick(strcmp(s, ")") == 0)) { }',
+    L('while (strcmp(s, ")") == 0) { }'));
+check('identifier ending in while untouched',
+    L('mywhile(a);') === 'mywhile(a);', L('mywhile(a);'));
+check('identifier starting with for untouched',
+    L('format(a);') === 'format(a);', L('format(a);'));
+check('range-for left alone (not the classic three-part form)',
+    L('for (auto& x : items) { }') === 'for (auto& x : items) { }',
+    L('for (auto& x : items) { }'));
+check('unbalanced parens do not corrupt the source',
+    L('while (a { }') === 'while (a { }', L('while (a { }'));
+
+// End to end: the reported reproduction must come out pumped.
+const repro = A.finish([
+    '#include <MatrixMiniR4.h>',
+    'void setup() {',
+    '  MiniR4.begin();',
+    '}',
+    'void loop() {',
+    '  MiniR4.OLED.print("PRESS UP");',
+    '  while(!MiniR4.BTN_UP.getState());',
+    '  while(!MiniR4.BTN_DOWN.getState()) { Serial.println(1); }',
+    '}',
+].join('\n'));
+check('reproduction: both gates pumped',
+    repro.includes('while(WiFiRuntime.tick(!MiniR4.BTN_UP.getState()));') &&
+    repro.includes('while(WiFiRuntime.tick(!MiniR4.BTN_DOWN.getState()))'),
+    repro.slice(repro.indexOf('userLoop')));
+check('reproduction: the OLED string was not touched',
+    repro.includes('MiniR4.OLED.print("PRESS UP")'));
+check('reproduction: driver loop still intact',
+    /void loop\(\)\n\{\n  WiFiRuntime\.poll\(\);/.test(repro));
+
 // --- 5. malformed input passes through ----------------------------------------
 
 check('no setup/loop passes through', A.finish('int x = 1;') === 'int x = 1;');

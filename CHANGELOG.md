@@ -59,6 +59,17 @@ Based on upstream v1.0.8. Format loosely inspired by
     working, which reads as a broken robot.
 
 ### Fixed
+- **Blocking user code no longer takes the hub off the network.** The runtime
+  is cooperatively scheduled, so any loop that does not return starved
+  discovery, TCP, telemetry *and* the USB channel. This was not an edge case:
+  the board starts executing the instant it resets, so students gate their
+  programs with "wait until BTN_UP is pressed", which the generator compiles
+  to a bare `while(!cond);` — the typical program took the hub off the
+  network from boot. Loop conditions are now wrapped in
+  `WiFiRuntime.tick(...)`, which services every transport, steps the VM and
+  throttles itself so tight loops stay tight. Validated on hardware with the
+  reported reproduction: parked on the gate with no button pressed, the hub
+  answers discovery, TCP, USB, and runs a VM program sent to it.
 - **A factory reset left the hub reporting an empty name** until the next
   boot rebuilt it, which the USB panel showed as "?" — a successful reset
   looking like a failed one.

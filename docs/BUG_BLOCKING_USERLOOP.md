@@ -1,9 +1,45 @@
 # OPEN BUG — blocking user code starves the runtime and makes the hub unreachable
 
-**Status:** open, root cause identified, not yet fixed.
-**Severity:** blocking. Not "a bug that can be hit" — **the normal way student
-programs are written hits it every time.**
+**Status: FIXED 2026-07-25, hardware-validated.** Kept as the record of what
+happened and why the design is shaped the way it is.
+**Severity was:** blocking. Not "a bug that can be hit" — **the normal way
+student programs are written hit it every time.**
 **Reported:** 2026-07-25, with a complete reproduction.
+
+## 0. How it was fixed
+
+- **`WiFiRuntime.tick(bool cond)`** (firmware): services the serial channel,
+  discovery, TCP and telemetry, steps the VM, and returns `cond` unchanged so
+  it can wrap a loop condition. Self-throttling at 5 ms, because a tight gate
+  loop calls it tens of thousands of times a second and every discovery poll
+  is a modem transaction.
+- **The wrapper rewrites every user loop condition** into
+  `while (WiFiRuntime.tick(COND))`, covering `while`, `do/while` and the
+  condition slot of `for`. Implemented as a scanner, not a regex: `while` and
+  `for` occur inside string literals and comments, and rewriting one of those
+  would corrupt the sketch in a way that is near-impossible to trace back.
+  User spacing is preserved so the generated code still looks like the
+  student's program.
+- **`tick()` also steps the VM.** Found during hardware validation: sending a
+  VM program while the robot sat at its gate loaded it and never ran it,
+  because `poll()` — which normally drives the VM — is exactly what a blocked
+  `userLoop` never reaches. Since the gate is where a robot spends most of
+  its idle life, "Send VM (fast)" would have appeared to do nothing most of
+  the time. `_pollVm()` gained a re-entry guard.
+
+**Hardware acceptance** (`examples/zDeveloper Use/MiniR4_GateRepro`, the
+reported reproduction verbatim), with the hub parked on `while(!BTN_UP)` and
+no button ever pressed:
+
+| Check | Result |
+|---|---|
+| UDP discovery | answers — `ASTROGENIUS 192.168.4.1 fw 1.2.0` |
+| TCP `info` | answers |
+| USB serial `info` | answers, three consecutive requests |
+| VM upload while parked | accepted, and the program **runs** (counter 27 → 76 between reads) |
+
+Test coverage: 20 new assertions in `tools/wifi_wrapper.test.js`, including
+every string/comment/paren trap the scanner exists for.
 
 > **Why this is the main path, not an edge case** (maintainer, 2026-07-25):
 > the Arduino starts executing the instant it resets, so students need a gate

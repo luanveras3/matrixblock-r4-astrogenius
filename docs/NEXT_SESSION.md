@@ -5,7 +5,24 @@ implemented, to be picked up cold. Ordered by what unblocks the most.
 
 ---
 
-## 1. Fix the blocking-loop starvation (blocking — nothing else ships first)
+## 1. ✅ DONE — blocking-loop starvation fixed 2026-07-25
+
+Fixed and hardware-validated; see §0 of `BUG_BLOCKING_USERLOOP.md` for what
+was done and the acceptance results. What remains from the original list:
+
+- [ ] **Rate-limit `log()`** — still open. Every frame is a synchronous
+      ~100 ms modem write, so prints inside a tight loop remain a self-DoS.
+      Cap ~10/s, drop the excess, emit a periodic "N lines dropped".
+- [ ] **Fix `control_wait_until` in the Arduino generator** — still open. The
+      wrapper now catches it, so this is no longer urgent, but the generator
+      still emits a bare `while(!cond);` which is wrong on its own terms and
+      would bite anyone using the generated code outside the wrapper.
+- [ ] **Consider `waitForStart()`** (item A2 in the bug doc) — the gate is
+      near-universal, so making it a first-class concept buys an OLED
+      "waiting" state, a remote Start from the IDE, and groundwork for R7.
+
+<details>
+<summary>Original entry (kept for context)</summary>
 
 Full analysis and implementation traps: **`BUG_BLOCKING_USERLOOP.md`**.
 
@@ -17,6 +34,8 @@ resets, so students gate their programs with "wait until BTN_UP is pressed" —
 which means the *typical* program, not an unusual one, starts with a bare
 busy-wait and takes the hub off the network from boot. The WiFi feature is
 not usable in a real classroom until this is fixed.
+
+</details>
 
 Work items:
 

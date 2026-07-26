@@ -98,6 +98,180 @@
             '$1WiFiRuntime.safeDelay$2');
     }
 
+    // --- Blocking-loop rewrite --------------------------------------------
+    //
+    // The runtime is cooperatively scheduled: poll() only runs when loop()
+    // comes back around. `delay` was already made safe, but LOOPS were not,
+    // and that is the gap that matters most in practice: the board starts
+    // executing the instant it resets, so students gate their programs with
+    // "wait until BTN_UP is pressed" — which the Blockly generator compiles
+    // to a bare `while(!cond);`. The typical program therefore took the hub
+    // off the network from boot, over WiFi *and* over the USB channel.
+    //
+    // So every user loop condition is wrapped in WiFiRuntime.tick(), which
+    // services the transports (never the VM) and returns the condition
+    // unchanged. tick() throttles itself, so a tight loop stays tight.
+    //
+    // This is done with a scanner rather than a regex on purpose: `while` and
+    // `for` appear inside string literals and comments, and rewriting one of
+    // those would corrupt the sketch in a way that is very hard to trace back
+    // to here.
+
+    function isIdentChar(c) {
+        return /[A-Za-z0-9_$]/.test(c);
+    }
+
+    // Index just past the `)` matching the `(` at openIdx, skipping over
+    // strings, chars and comments so that a paren inside them cannot throw
+    // the count off. Returns -1 when unbalanced.
+    function matchParen(src, openIdx) {
+        let depth = 0;
+        for (let i = openIdx; i < src.length; i++) {
+            const c = src.charAt(i);
+            const n = src.charAt(i + 1);
+            if (c === '/' && n === '/') {
+                i = src.indexOf('\n', i);
+                if (i < 0) return -1;
+                continue;
+            }
+            if (c === '/' && n === '*') {
+                i = src.indexOf('*/', i + 2);
+                if (i < 0) return -1;
+                i++;
+                continue;
+            }
+            if (c === '"' || c === "'") {
+                const quote = c;
+                i++;
+                while (i < src.length && src.charAt(i) !== quote) {
+                    if (src.charAt(i) === '\\') i++;
+                    i++;
+                }
+                continue;
+            }
+            if (c === '(') depth++;
+            else if (c === ')') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    // Split a for-header on its top-level semicolons (those not nested in
+    // parens/brackets and not inside a literal). Returns null for anything
+    // that is not the classic three-part form — a range-for has no top-level
+    // `;` at all, and guessing at it would be worse than leaving it alone.
+    function splitForHeader(inner) {
+        const parts = [];
+        let depth = 0, start = 0;
+        for (let i = 0; i < inner.length; i++) {
+            const c = inner.charAt(i);
+            const n = inner.charAt(i + 1);
+            if (c === '/' && n === '/') { i = inner.indexOf('\n', i); if (i < 0) break; continue; }
+            if (c === '/' && n === '*') { i = inner.indexOf('*/', i + 2); if (i < 0) break; i++; continue; }
+            if (c === '"' || c === "'") {
+                const q = c; i++;
+                while (i < inner.length && inner.charAt(i) !== q) {
+                    if (inner.charAt(i) === '\\') i++;
+                    i++;
+                }
+                continue;
+            }
+            if (c === '(' || c === '[') depth++;
+            else if (c === ')' || c === ']') depth--;
+            else if (c === ';' && depth === 0) {
+                parts.push(inner.slice(start, i));
+                start = i + 1;
+            }
+        }
+        parts.push(inner.slice(start));
+        return parts.length === 3 ? parts : null;
+    }
+
+    function wrapCondition(cond) {
+        const trimmed = cond.trim();
+        // Already pumped (idempotence), or an empty `for(;;)` condition.
+        if (trimmed.indexOf('WiFiRuntime.tick') >= 0) return cond;
+        if (trimmed.length === 0) return 'WiFiRuntime.tick()';
+        return 'WiFiRuntime.tick(' + trimmed + ')';
+    }
+
+    function rewriteBlockingLoops(src) {
+        if (!src) return src;
+        let out = '';
+        let i = 0;
+        while (i < src.length) {
+            const c = src.charAt(i);
+            const n = src.charAt(i + 1);
+
+            // Pass literals and comments through untouched.
+            if (c === '/' && n === '/') {
+                const end = src.indexOf('\n', i);
+                const stop = end < 0 ? src.length : end;
+                out += src.slice(i, stop);
+                i = stop;
+                continue;
+            }
+            if (c === '/' && n === '*') {
+                const end = src.indexOf('*/', i + 2);
+                const stop = end < 0 ? src.length : end + 2;
+                out += src.slice(i, stop);
+                i = stop;
+                continue;
+            }
+            if (c === '"' || c === "'") {
+                let j = i + 1;
+                while (j < src.length && src.charAt(j) !== c) {
+                    if (src.charAt(j) === '\\') j++;
+                    j++;
+                }
+                out += src.slice(i, Math.min(j + 1, src.length));
+                i = j + 1;
+                continue;
+            }
+
+            // A `while` or `for` keyword, at a token boundary.
+            let kw = null;
+            if (src.startsWith('while', i)) kw = 'while';
+            else if (src.startsWith('for', i)) kw = 'for';
+            if (kw) {
+                const prev = i > 0 ? src.charAt(i - 1) : ' ';
+                const after = src.charAt(i + kw.length);
+                if (!isIdentChar(prev) && !isIdentChar(after)) {
+                    let k = i + kw.length;
+                    while (k < src.length && /\s/.test(src.charAt(k))) k++;
+                    if (src.charAt(k) === '(') {
+                        const close = matchParen(src, k);
+                        if (close > 0) {
+                            const inner = src.slice(k + 1, close);
+                            let rebuilt = null;
+                            if (kw === 'while') {
+                                rebuilt = '(' + wrapCondition(inner) + ')';
+                            } else {
+                                const parts = splitForHeader(inner);
+                                if (parts) {
+                                    rebuilt = '(' + parts[0] + ';' +
+                                              wrapCondition(parts[1]) + ';' +
+                                              parts[2] + ')';
+                                }
+                            }
+                            if (rebuilt !== null) {
+                                out += src.slice(i, k) + rebuilt;
+                                i = close + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            out += c;
+            i++;
+        }
+        return out;
+    }
+
     // R3 v2 — mirror the print blocks to the wireless console.
     //
     // Serial.print/println keep working exactly as before over USB; the
@@ -215,16 +389,18 @@
                '}\n');
 
         // Rewrites run last, over the whole assembled sketch: the driver
-        // itself contains no delay/Serial.print calls, and doing it once
-        // here is cheaper than doing it per fragment.
-        return rewriteSerialPrints(
-            rewriteDelays(head + userSetup + userLoop + driver));
+        // itself contains no delay/Serial.print/loop constructs, and doing it
+        // once here is cheaper than doing it per fragment.
+        return rewriteBlockingLoops(
+            rewriteSerialPrints(
+                rewriteDelays(head + userSetup + userLoop + driver)));
     }
 
     // Expose for testing.
     Blockly.Arduino.__wrapWithWiFiRuntime = wrapWithWiFiRuntime;
     Blockly.Arduino.__rewriteWifiDelays   = rewriteDelays;
     Blockly.Arduino.__rewriteWifiPrints   = rewriteSerialPrints;
+    Blockly.Arduino.__rewriteWifiLoops    = rewriteBlockingLoops;
     Blockly.Arduino.__generateSketchId    = generateSketchId;
     Blockly.Arduino.__formatSketchIdLit   = formatSketchIdLiteral;
 
