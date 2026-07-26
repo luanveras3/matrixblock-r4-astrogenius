@@ -222,7 +222,34 @@ The persistent radio-off feature stands on its own merits — competition rules
 forbid radios during a run, and it is the honest way to leave a robot quiet.
 Just do not sell it as a battery fix until the drain is actually attributed.
 
-## 4z. MXColorV3 fixed — it was underexposed, not miscalibrated
+## 4z. MXColorV3 — WITHDRAWN. Both experiments were invalid.
+
+**Do not trust anything in the section below.** The vendor change was reverted
+and `MiniR4_MXColorV3.cpp` is no longer tracked; no file under `Sensors/` is
+modified by this fork.
+
+Why both runs were worthless: the TCS34725 is separately powered and **keeps
+its register state across an RA4M1 reset**. Every measurement was taken on a
+sensor still carrying exposure settings written by an earlier firmware, so
+neither "the driver is underexposed" nor "the delay alone fixes it" was ever
+tested against a clean device.
+
+**To retest properly:** power-cycle the robot between conditions, not just
+reboot the MCU. Conditions worth comparing are stock `begin()` alone, stock
+plus a settling delay, and stock plus exposure configuration.
+
+Current known state on hardware: with the vendor driver stock, `begin()`
+returned false and readings were garbage (25/255/25, ID -1) — but that reading
+is itself from a contaminated sensor, so it proves nothing either.
+
+What we kept, entirely on our side: the VM's I2C begin handler waits 60 ms
+before the first read, because a VM program can begin and read in the same
+tick, unlike generated sketches which begin in setup and read in loop.
+
+<details>
+<summary>Original (withdrawn) analysis</summary>
+
+## 4z-old. MXColorV3 "fixed" — it was underexposed, not miscalibrated
 
 The colour sensor answered on I2C, `begin()` returned true, and every channel
 read 0 with `getColorID()` returning -1. Cause: `begin()` powered the chip and
@@ -246,6 +273,8 @@ in the repo (`.gitignore` whitelists just this file) — otherwise a clean
 install silently reintroduces it. It very likely also explains the older
 "MXColorV3 mislabels colours" note: a starved signal classifies badly.
 Worth including in the batched report to MATRIX Robotics.
+
+</details>
 
 ## 4a. Port sensors — confirmed on real hardware 2026-07-25
 

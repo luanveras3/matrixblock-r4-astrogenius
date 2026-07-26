@@ -224,7 +224,17 @@ static int32_t _beginI2C(PORT& p, uint8_t sensor)
             p.MXLaserV2.setTimeout(50);
             p.MXLaserV2.startContinuous(50);
             return 1;
-        case 1: return p.MXColorV3.begin() ? 1 : 0;
+        case 1: {
+            // The TCS34725 needs one full integration cycle before its first
+            // conversion is valid. The stock IDE never notices — it calls
+            // begin() in setup() and reads in loop(), so the time passes for
+            // free — but a VM program can begin and read in the same tick and
+            // would see zeros. Waiting here, rather than patching the vendor
+            // driver, keeps the fix where the unusual usage is.
+            if (!p.MXColorV3.begin()) return 0;
+            delay(60);
+            return 1;
+        }
         case 2: return p.MXLaser.begin()   ? 1 : 0;
         case 3: return p.MXColor.begin()   ? 1 : 0;
         case 4: return p.MXGesture.begin() == 0 ? 1 : 0;   // 0 = success

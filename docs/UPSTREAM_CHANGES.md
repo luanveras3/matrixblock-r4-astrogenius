@@ -33,38 +33,32 @@ diff -u <your copy> resources/app_src/<same path>
 
 ## Modified upstream files
 
-### 1. `arduino/libraries/MatrixMiniR4/src/Modules/Sensors/MiniR4_MXColorV3.cpp`
+### 1. ~~`MiniR4_MXColorV3.cpp`~~ — WITHDRAWN, vendor file left untouched
 
-**Six lines in `begin()` — and the one change in this fork we are NOT confident
-about. Please read the caveat before accepting it.**
+We shipped a six-line change to `begin()` (writing ATIME and gain, plus a
+settling delay) on the reading that the sensor was underexposed and returned
+zeros. **That change has been reverted and the vendor file is no longer part of
+this fork.** No file under `Sensors/` is modified.
 
-`begin()` powers the chip and enables the ADC but never writes integration time
-or gain, so the TCS34725 keeps its post-reset defaults (minimum integration,
-1x gain). `TCS34725_ATIME` and `TCS34725_CONTROL` are defined in the header and
-written nowhere, which is what drew our attention.
+The story is worth keeping, because the mistake is easy to repeat.
 
-We added those two writes plus a 60 ms wait before the first read. Measured on
-our bench: every channel went from 0 (and `getColorID()` from -1) to
-`63/111/115` and ID 3.
+Luan challenged the diagnosis — plenty of people use the stock software with
+this sensor. Re-testing showed he was right to: with the exposure writes
+removed and only the delay kept, colours still read correctly, which looked
+like proof that the delay alone was the fix.
 
-**The caveat.** That change did two things at once and we never separated them.
-The sensor also needs a full integration cycle before its first valid
-conversion, and our failing test read immediately after `begin()` inside a
-tight VM loop. The stock IDE puts `begin()` in `setup()` and reads in `loop()`,
-which gives that time for free — and an earlier note of ours records the HUD
-showing colours that were *mislabelled*, not zero, meaning the stock path was
-reading real data.
+**That second experiment was also invalid.** The TCS34725 is separately
+powered and keeps its register state across an RA4M1 reset, so the sensor was
+still carrying the exposure configuration written by the previous firmware.
+Both runs measured a sensor we had already configured.
 
-So the honest position: **the 60 ms wait may be the whole fix, and the
-exposure configuration may be unnecessary or even unwanted** if your defaults
-are deliberate. Users report the stock software working with this sensor, which
-is evidence against our reading.
+Neither the original claim nor its correction is established. Anyone retesting
+this must **power-cycle the sensor** (not just the MCU) between conditions.
 
-To settle it, revert `begin()` to stock, keep only the delay, and see whether
-colours read. We did not run that experiment before shipping the change, and
-we should have.
-
-Commit: `ca1e71f`.
+What remains on our side: our VM's I2C begin handler waits 60 ms after
+`begin()` before the first read, because a VM program can begin and read in the
+same tick. That lives in `MiniR4VM.cpp` — our code, our unusual usage — and
+touches nothing of yours.
 
 ### 2. `resources/app_src/views/main.html`
 
