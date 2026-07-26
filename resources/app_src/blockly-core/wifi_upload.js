@@ -51,6 +51,8 @@
             modalTitle:      'WiFi upload',
             searching:       'Searching for robots...',
             found:           '%d robot(s) found.',
+            bridgeOld:       'This robot cannot receive wireless uploads: its WiFi module runs firmware %s, and %s or newer is required. Update it with the Arduino IDE Firmware Updater, or upload over the USB cable meanwhile.',
+            bridgeUnknown:   'Could not read the WiFi module version; trying the upload anyway.',
             notConnected:    'Not connected to a robot. Open the connection panel in the toolbar and connect first.',
             noneFound:       'No robot found. Check that the hub is on and on the same network (or connect to its MBR4-xxxx access point). The first search may also trigger a Windows Firewall prompt — allow access and try again.',
             refresh:         'Search again',
@@ -108,6 +110,8 @@
             modalTitle:      'Envio via WiFi',
             searching:       'Procurando robôs...',
             found:           '%d robô(s) encontrado(s).',
+            bridgeOld:       'Este robô não consegue receber envios sem fio: o módulo WiFi está com firmware %s, e é preciso %s ou mais novo. Atualize pelo Firmware Updater da IDE do Arduino, ou envie pelo cabo USB enquanto isso.',
+            bridgeUnknown:   'Não consegui ler a versão do módulo WiFi; vou tentar o envio mesmo assim.',
             notConnected:    'Sem conexão com um robô. Abra o painel de conexão na barra e conecte primeiro.',
             noneFound:       'Nenhum robô encontrado. Confira se o hub está ligado e na mesma rede (ou conecte-se ao ponto de acesso MBR4-xxxx dele). A primeira busca também pode disparar o aviso do Firewall do Windows — permita o acesso e tente de novo.',
             refresh:         'Buscar de novo',
@@ -533,11 +537,53 @@
 
     let busy = false;
 
+    // Minimum ESP32-S3 firmware for OTA. Below this, startDownload is absent.
+    const MIN_BRIDGE = '0.5.0';
+
+    function versionLess(a, b) {
+        const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+        const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+        for (let i = 0; i < 3; i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+        }
+        return false;
+    }
+
+    async function checkBridgeVersion(ui) {
+        const hud = window.MBR4Hud;
+        if (!hud || !hud.isConnected()) return;   // the caller reports this
+        let info;
+        try {
+            info = await hud.request({ t: 'info' }, (o) => o.t === 'info', 4000);
+        } catch (e) {
+            ui.log(tr('bridgeUnknown'), 'error');
+            return;
+        }
+        // An older runtime does not report the field at all. Proceeding is the
+        // right call there: we do not know that it is too old, and refusing on
+        // an absent field would block hubs that work.
+        if (!info || typeof info.bridge !== 'string' || !info.bridge) {
+            ui.log(tr('bridgeUnknown'), 'error');
+            return;
+        }
+        if (versionLess(info.bridge, MIN_BRIDGE)) {
+            const e = new Error(fmt(tr('bridgeOld'), info.bridge, MIN_BRIDGE));
+            e.bridgeTooOld = true;   // no point retrying this one
+            throw e;
+        }
+    }
+
     async function uploadTo(robot, ui) {
         // Same guard as the VM path: the target now comes from the shared
         // connection, so "no robot" is a normal state to report, not a crash.
         robot = robot || (window.MBR4Hud && window.MBR4Hud.currentRobot());
         if (!robot) throw new Error(tr('notConnected'));
+        // Check the modem firmware BEFORE compiling. OTA's startDownload needs
+        // bridge >= 0.5.0; below that the upload dies deep inside OTAUpdate
+        // with a bare error code, after the user has already waited through a
+        // full compile. Failing here costs a second and explains itself.
+        await checkBridgeVersion(ui);
+
         const t0 = Date.now();
 
         ui.phase(tr('phase_generate'));
@@ -646,6 +692,8 @@
                 await uploadTo(robot, ui);
             } catch (e) {
                 if (e && e.empty) { ui.log(e.message, 'error'); return; }
+                // A too-old modem will not fix itself on a second attempt.
+                if (e && e.bridgeTooOld) { ui.log(e.message, 'error'); return; }
                 if (e && e.output) ui.consoleOut(e.output);
                 ui.log(fmt(tr('retrying'), e.message), 'error');
                 await uploadTo(robot, ui);   // single automatic retry

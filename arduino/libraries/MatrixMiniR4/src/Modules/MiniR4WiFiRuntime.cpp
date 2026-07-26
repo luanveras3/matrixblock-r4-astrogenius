@@ -1376,13 +1376,18 @@ void MiniR4WiFiRuntimeClass::_handleLine(char* line)
         _sendJson("{\"t\":\"info\",\"name\":\"%s\",\"mac\":\"%s\",\"fw\":\"%s\","
                   "\"ip\":\"%u.%u.%u.%u\",\"mode\":\"%s\",\"ssid\":\"%s\","
                   "\"ap\":\"%s\",\"waiting\":%s,\"radio\":%s,\"radioBoot\":%s,"
-                  "\"batt\":%d.%02d,\"uptime\":%lu}",
+                  "\"bridge\":\"%s\",\"batt\":%d.%02d,\"uptime\":%lu}",
                   nameEsc, _mac4, MINIR4_WIFI_RUNTIME_VERSION,
                   ip[0], ip[1], ip[2], ip[3],
                   _netMode == NET_AP ? "ap" : "sta", ssidEsc, apNowEsc,
                   _waitingStart ? "true" : "false",
                   _radioDisabled ? "false" : "true",
                   _radioOffAtBoot ? "false" : "true",
+                  // The ESP32-S3 modem firmware. OTA's startDownload needs
+                  // >= 0.5.0, and below that an upload fails deep inside
+                  // OTAUpdate with a bare error code — so the IDE checks this
+                  // first and says something useful instead.
+                  WiFi.firmwareVersion(),
                   (int)MiniR4.PWR.getBattVoltage(),
                   (int)(MiniR4.PWR.getBattVoltage() * 100) % 100,
                   (unsigned long)millis());
