@@ -74,6 +74,21 @@ identical), so a `.mbr4` saved in one version opens in the other.
 
 ---
 
+## How it works
+
+[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) explains both upload paths end to
+end, what each costs, and how the design got here — including the BLE attempt
+that came first and why it was abandoned. Every figure in it was measured on
+real hardware.
+
+The short version: **OTA** compiles your blocks and reflashes the robot over
+the air, so it runs the real generated C++ with no block unsupported, at about
+30 seconds a round. **The VM** compiles to bytecode the robot interprets
+immediately, so iteration is instant, at the cost of a 3584-byte program limit
+and partial block coverage. Both are wireless; you pick per upload.
+
+---
+
 ## What v3.x added, and is still here
 
 - **Portuguese (pt-BR) localization** — the full Blockly locale, block dropdown
