@@ -205,6 +205,32 @@ MiniR4VM::Result MiniR4VM::execLogic(VMOp op)
 // port switch cannot share a pointer — a template keeps the four cases from
 // becoming four copies of the channel logic.
 template <typename PORT>
+static int32_t _readI2C(PORT& p, uint8_t sensor, uint8_t fn)
+{
+    switch (sensor) {
+        case 0:   // MXLaser V1
+            return (int32_t)p.MXLaser.getDistance();
+        case 1:   // MXColor V1
+            switch (fn) {
+                case 0: return p.MXColor.getColor((ColorType)0);
+                case 1: return p.MXColor.getColor((ColorType)1);
+                case 2: return p.MXColor.getColor((ColorType)2);
+                case 4: return p.MXColor.getGrayscale();
+                default: return p.MXColor.getColorNumber_Deprecated();
+            }
+        case 2:   // MXLineTracer
+            switch (fn) {
+                case 0:  return p.MXLineTracer.getLineWidth();
+                case 1:  return (int32_t)p.MXLineTracer.getError();
+                case 2:  return p.MXLineTracer.isOnline() ? 1 : 0;
+                default: return p.MXLineTracer.getSensor((uint8_t)(fn - 3));
+            }
+        default:
+            return 0;
+    }
+}
+
+template <typename PORT>
 static int32_t _readColor(PORT& p, uint8_t channel)
 {
     switch (channel) {
@@ -610,6 +636,20 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
                 case 2: out = _readColor(MiniR4.I2C2, (uint8_t)ch); break;
                 case 3: out = _readColor(MiniR4.I2C3, (uint8_t)ch); break;
                 case 4: out = _readColor(MiniR4.I2C4, (uint8_t)ch); break;
+            }
+            return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::I2C_READ: {   // pop fn, sensor, port -> push value
+            int32_t fn, sensor, port;
+            if (!pop(fn) || !pop(sensor) || !pop(port))
+                return Result::ERR_STACK_UNDERFLOW;
+            int32_t out = 0;
+            switch ((uint8_t)port) {
+                case 1: out = _readI2C(MiniR4.I2C1, (uint8_t)sensor, (uint8_t)fn); break;
+                case 2: out = _readI2C(MiniR4.I2C2, (uint8_t)sensor, (uint8_t)fn); break;
+                case 3: out = _readI2C(MiniR4.I2C3, (uint8_t)sensor, (uint8_t)fn); break;
+                case 4: out = _readI2C(MiniR4.I2C4, (uint8_t)sensor, (uint8_t)fn); break;
             }
             return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
         }

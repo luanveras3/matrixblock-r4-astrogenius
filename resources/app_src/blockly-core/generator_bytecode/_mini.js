@@ -349,4 +349,37 @@ goog.require('Blockly.BytecodeVM');
         const v = G.valueToCode(this, 'SEED', G.ORDER_ATOMIC) || G.pushInt(0);
         return v + G.byte(G.OPS.RANDOM_SEED);
     };
+
+    // --- Round 4b: the rest of the I2C family --------------------------------
+    // One generic I2C_READ opcode serves all of these; the generator's only
+    // job is to name the (sensor, function) pair.
+    function i2cRead(block, sensor, fn) {
+        const port = i2cPort(block.getFieldValue('PIN'), block.type);
+        return [G.pushInt(port) + G.pushInt(sensor) + G.pushInt(fn) +
+                G.byte(G.OPS.I2C_READ), G.ORDER_ATOMIC];
+    }
+
+    // begin() blocks: the driver is already constructed by the runtime, so
+    // there is nothing to emit — and emitting nothing keeps them from being
+    // reported to the student as unsupported when they are just unnecessary.
+    ['mini_i2c_MXlaser_begin', 'mini_i2c_MXcolor_begin',
+     'mini_i2c_MXGesture_begin', 'mini_i2c_HTcolor_begin',
+     'mini_i2c_mxlinetracer_begin'].forEach((t) => { G[t] = function () { return ''; }; });
+
+    G['mini_i2c_MXlaser_getDistance'] = function () { return i2cRead(this, 0, 0); };
+
+    G['mini_i2c_MXcolor_getColor'] = function () {
+        const map = { R: 0, G: 1, B: 2, RED: 0, GREEN: 1, BLUE: 2, GRAY: 4, GRAYSCALE: 4 };
+        const raw = String(this.getFieldValue('COLOR') || '').toUpperCase();
+        return i2cRead(this, 1, map[raw] !== undefined ? map[raw] : 3);
+    };
+    G['mini_i2c_MXcolor_getColorNumber'] = function () { return i2cRead(this, 1, 3); };
+    G['mini_MXGrayscale_getGrayscale']   = function () { return i2cRead(this, 1, 4); };
+
+    G['mini_i2c_mxlinetracer_get_number'] = function () { return i2cRead(this, 2, 1); };
+    G['mini_i2c_mxlinetracer_get_boolean'] = function () { return i2cRead(this, 2, 2); };
+    G['mini_i2c_mxlinetracer_getsensor'] = function () {
+        const n = parseInt(String(this.getFieldValue('SENSOR') || '1'), 10) || 1;
+        return i2cRead(this, 2, 3 + Math.max(0, Math.min(9, n - 1)));
+    };
 })();

@@ -68,7 +68,7 @@ Blockly.BytecodeVM.OPS = {
     MOTOR_SETPPR: 0xEF, RANDOM_SEED: 0xF0, ROUND: 0xF1,
     // Round 4 — must stay in step with MiniR4VM.h.
     MAP: 0xF2, I2C_LASER: 0xF3, I2C_COLOR: 0xF4,
-    OLED_TEXTSIZE: 0xC4, OLED_TEXTCOLOR: 0xC5,
+    OLED_TEXTSIZE: 0xC4, OLED_TEXTCOLOR: 0xC5, I2C_READ: 0xF5,
 };
 
 // --- Per-compile state ------------------------------------------------------

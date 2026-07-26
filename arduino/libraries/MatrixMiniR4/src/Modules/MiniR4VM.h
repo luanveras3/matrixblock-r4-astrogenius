@@ -172,6 +172,16 @@ enum class VMOp : uint8_t {
                           ///< channel 0=R 1=G 2=B 3=colorID
     OLED_TEXTSIZE = 0xC4, ///< pop size
     OLED_TEXTCOLOR= 0xC5, ///< pop color(0/1)
+
+    /// Generic I2C read: pop fn, sensor, port -> push value. One opcode for
+    /// the whole family instead of one per sensor — the port switch is the
+    /// expensive part (four template instantiations) and this pays it once.
+    ///   sensor 0 = MXLaser (V1)   fn 0 = distance mm
+    ///   sensor 1 = MXColor (V1)   fn 0..2 = R/G/B, 3 = colour number,
+    ///                             4 = grayscale
+    ///   sensor 2 = MXLineTracer   fn 0 = line width, 1 = error,
+    ///                             2 = online?, 3..12 = sensor n-3
+    I2C_READ      = 0xF5,
 };
 
 /**
