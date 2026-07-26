@@ -199,6 +199,29 @@ counterpart.
   hub) and the BTN_UP rescue of a deliberately-blocking sketch — note that
   item 1 above now gives us the perfect blocking sketch for it.
 
+## 4y. Battery: the "radio is 85% of the drain" claim is WITHDRAWN
+
+Measured first as radio on 13 mV/min vs radio off 2 mV/min, and reported as
+"the radio is ~85% of the drain". A follow-up measurement contradicts it: with
+the radio ON, telemetry off gave -0.4 mV/min and telemetry ON at 10 Hz (2023
+frames in 4 minutes) gave -0.0 mV/min. Both effectively zero.
+
+Two things went wrong with the first measurement. A VM program was running
+during it and not during the second, so the states were not comparable. More
+fundamentally, **a 4-10 minute voltage window on a Li-ion pack measures cell
+relaxation as much as discharge** — the pack sags under load and recovers when
+it is removed, and the first run started right after heavy flashing and
+uploads. 13 mV/min was probably a transient tail.
+
+What is still true: cells get visibly consumed across a bench day. What is NOT
+established: what consumes them. Attributing it needs either a much longer run
+(an hour or more per state, from a rested pack) or a current measurement,
+which voltage cannot substitute for.
+
+The persistent radio-off feature stands on its own merits — competition rules
+forbid radios during a run, and it is the honest way to leave a robot quiet.
+Just do not sell it as a battery fix until the drain is actually attributed.
+
 ## 4z. MXColorV3 fixed — it was underexposed, not miscalibrated
 
 The colour sensor answered on I2C, `begin()` returned true, and every channel
