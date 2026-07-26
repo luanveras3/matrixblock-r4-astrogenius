@@ -36,6 +36,8 @@ const PATCHES = [
   ['blockly-core/wifi_vm_upload.js',                  'blockly-core/wifi_vm_upload.js'],
   // R2 — live block debugger (pc stream -> block highlight, breakpoints)
   ['blockly-core/wifi_vm_debug.js',                   'blockly-core/wifi_vm_debug.js'],
+  // Unified connection manager (USB + WiFi in one surface).
+  ['blockly-core/connection.js',                      'blockly-core/connection.js'],
   // Hub configuration over the USB cable — the path that does not depend on
   // the network being configured.
   ['blockly-core/usb_config.js',                      'blockly-core/usb_config.js'],

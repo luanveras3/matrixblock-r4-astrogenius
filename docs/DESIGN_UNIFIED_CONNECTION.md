@@ -1,6 +1,16 @@
 # Design — one connection manager for USB and WiFi
 
-**Status:** proposed, not implemented. Requested 2026-07-25.
+**Status: steps 1 and 2 IMPLEMENTED 2026-07-25** (`connection.js`). The
+indicator, the two-transport panel and the setup form all ship; converting the
+remaining per-feature pickers (§4 steps 3-4) is still open.
+
+Implemented differently from §2 in one important way: the panel does **not**
+open its own WiFi socket. The HUD already owns the single TCP slot and its
+reconnect logic, so the panel drives it through
+`MBR4Hud.send/onFrame/onConnect/isConnected/selectRobot/currentRobot`. Adding a
+second client would have recreated the exact contention this design exists to
+remove. USB is owned outright — and released when the panel closes, because
+holding the port would block arduino-cli's USB upload.
 **Motivation, in the maintainer's words:** *"that way we will always know when
 it is connected to WiFi and when it is not."*
 

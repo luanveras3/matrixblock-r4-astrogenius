@@ -81,6 +81,7 @@ arduino/libraries/MatrixMiniR4/examples/7-WiFi Runtime/**/.build/
 !resources/app_src/blockly-core/wifi_vm_upload.js
 !resources/app_src/blockly-core/wifi_vm_debug.js
 !resources/app_src/blockly-core/usb_config.js
+!resources/app_src/blockly-core/connection.js
 !resources/app_src/assets/
 !resources/app_src/assets/img/
 !resources/app_src/assets/img/astrogenius-badge.png

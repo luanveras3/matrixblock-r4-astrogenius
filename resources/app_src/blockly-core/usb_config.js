@@ -521,6 +521,13 @@
 
     // --- Nav button --------------------------------------------------------
     function installButton() {
+        // The unified connection panel covers this ground and does it for
+        // both transports at once, so it owns the navbar affordance. This
+        // module stays loaded — its modal is still reachable through
+        // MBR4UsbConfig.open() and its probe logic is a useful fallback —
+        // but a second button would put us right back to scattered
+        // connection UI, which is the thing being fixed.
+        if (window.MBR4Connection) return;
         const anchor = document.getElementById('vmDebugNavLink')
                     || document.getElementById('vmUploadNavLink')
                     || document.getElementById('wifiUploadNavLink');

@@ -54,22 +54,6 @@ not usable in a real classroom until this is fixed.
 
 </details>
 
-Work items:
-
-- [ ] Add `WiFiRuntime.tick(bool cond)` / `tick()` — services network + serial,
-      **never** the VM (re-entering it is the `a9db855` stack-overflow bug).
-- [ ] `arduino_wifi_wrapper.js`: rewrite user `while (COND)` →
-      `while (WiFiRuntime.tick(COND))`. Also `do/while` and `for(;;)`. Keep
-      `stripOuterWhileTrue`. Do not touch `while` inside strings or comments.
-- [ ] Fix `control_wait_until` in the Arduino generator to emit a yielding
-      loop, so block output is correct even outside the wrapper.
-- [ ] Rate-limit `log()` — every frame is a synchronous ~100 ms modem write,
-      so prints inside a tight loop are a self-DoS. Cap ~10/s, drop the rest,
-      emit a periodic "N lines dropped".
-- [ ] Add wrapper tests for each construct, then the hardware acceptance:
-      flash the reproduction sketch and confirm the hub stays discoverable
-      while parked on `while (!BTN_UP)`.
-
 ## 2. Separate the "cannot upload via VM" report
 
 See `BUG_BLOCKING_USERLOOP.md` §6.2. Two candidate causes with different
@@ -78,7 +62,18 @@ already being starved by the previous program. **Rescue with BTN_UP, confirm
 discovery, then retry the upload** before changing anything, and read the
 warning list the Send-VM window prints.
 
-## 3. One connection manager for USB and WiFi
+## 3. One connection manager for USB and WiFi — PARTLY DONE
+
+**Done 2026-07-25:** `connection.js` — navbar indicator with a lamp per
+transport, a Status pane showing the cable link, the discovered robots, the
+SSID the *computer* is on versus the one the robot broadcasts, the battery
+warning and a Start button when a robot is waiting; plus a Setup pane with the
+whole config form working over whichever link is up.
+
+**Still open:** converting the per-feature pickers (HUD, Send via WiFi, Send
+VM, debugger) to ask the manager for the current robot, deleting each picker
+as its consumer switches, and finally removing `MBR4Hud.pause()/resume()` once
+nothing competes for the TCP slot.
 
 Full design: **`DESIGN_UNIFIED_CONNECTION.md`**.
 

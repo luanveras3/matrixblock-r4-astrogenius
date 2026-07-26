@@ -1129,6 +1129,7 @@
     // 5 s. The uploader's own progress UI stays informative during the gap.
     const REMEMBER_KEY = 'matrix-hud-robot-mac';
     let hudClient = null;
+    let hudRobot = null;           // discovery record of the attached robot
     let hudSelectedMac = null;     // preferred robot; overrides discovery
     let reconnectTimer = 0;
     let reconnectDelayMs = 5000;
@@ -1224,6 +1225,7 @@
         }
 
         hudClient = client;
+        hudRobot = robot;
         hudConnected = true;
         setHudAwaiting(false);
         setHudHub(robot.name || robot.ip);
@@ -1451,6 +1453,21 @@
             };
         },
         isConnected: () => hudConnected,
+        /** The robot this socket is attached to, or null. */
+        currentRobot: () => (hudConnected ? hudRobot : null),
+        /**
+         * Point the single TCP slot at a specific robot (by mac suffix) and
+         * reconnect. Exposed so the unified connection panel can own robot
+         * choice without opening a second client — the runtime accepts one,
+         * and every past attempt to have two ended in them evicting each
+         * other. Pass null to go back to auto-pick.
+         */
+        selectRobot: (mac) => {
+            hudSelectedMac = mac || null;
+            rememberMac(mac || null);
+            clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(connectLoop, 50);
+        },
 
         _parseTelemetryFrame: parseTelemetryFrame,
         _mounted:  () => hudMounted,
