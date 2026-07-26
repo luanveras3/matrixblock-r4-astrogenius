@@ -205,6 +205,17 @@ MiniR4VM::Result MiniR4VM::execLogic(VMOp op)
 // port switch cannot share a pointer — a template keeps the four cases from
 // becoming four copies of the channel logic.
 template <typename PORT>
+static void _ltCmd(PORT& p, uint8_t fn, uint8_t arg)
+{
+    switch (fn) {
+        case 0: p.MXLineTracer.setThreshold(arg); break;
+        case 1: p.MXLineTracer.startCalibration(); break;
+        case 2: p.MXLineTracer.endCalibration(); break;
+        default: break;
+    }
+}
+
+template <typename PORT>
 static int32_t _beginI2C(PORT& p, uint8_t sensor)
 {
     switch (sensor) {
@@ -654,6 +665,53 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
                 case 4: out = _readColor(MiniR4.I2C4, (uint8_t)ch); break;
             }
             return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::DHT_POLL: {   // pop port
+            int32_t port;
+            if (!pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            const uint8_t i = (uint8_t)((port - 1) & 0x03);
+            float t = 0; int h = 0;
+            switch ((uint8_t)port) {
+                case 1: MiniR4.D1.MXDHT.readTemperatureHumidity(t, h); break;
+                case 2: MiniR4.D2.MXDHT.readTemperatureHumidity(t, h); break;
+                case 3: MiniR4.D3.MXDHT.readTemperatureHumidity(t, h); break;
+                case 4: MiniR4.D4.MXDHT.readTemperatureHumidity(t, h); break;
+                default: return Result::OK;
+            }
+            _dhtT[i] = (int16_t)t;
+            _dhtH[i] = (int16_t)h;
+            return Result::OK;
+        }
+
+        case VMOp::DHT_GET: {   // pop param, port
+            int32_t param, port;
+            if (!pop(param) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            const uint8_t i = (uint8_t)((port - 1) & 0x03);
+            return push(param ? _dhtH[i] : _dhtT[i])
+                   ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::LT_CMD: {   // pop arg, fn, port
+            int32_t arg, fn, port;
+            if (!pop(arg) || !pop(fn) || !pop(port))
+                return Result::ERR_STACK_UNDERFLOW;
+            switch ((uint8_t)port) {
+                case 1: _ltCmd(MiniR4.I2C1, (uint8_t)fn, (uint8_t)arg); break;
+                case 2: _ltCmd(MiniR4.I2C2, (uint8_t)fn, (uint8_t)arg); break;
+                case 3: _ltCmd(MiniR4.I2C3, (uint8_t)fn, (uint8_t)arg); break;
+                case 4: _ltCmd(MiniR4.I2C4, (uint8_t)fn, (uint8_t)arg); break;
+            }
+            return Result::OK;
+        }
+
+        case VMOp::SERIAL_IN: {   // pop fn, port
+            int32_t fn, port;
+            if (!pop(fn) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
+            int32_t v;
+            if (port == 1) v = fn ? Serial1.read() : Serial1.available();
+            else           v = fn ? Serial.read()  : Serial.available();
+            return push(v) ? Result::OK : Result::ERR_STACK_OVERFLOW;
         }
 
         case VMOp::PORT_DWRITE: {   // pop value, side, port

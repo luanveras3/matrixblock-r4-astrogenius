@@ -217,6 +217,20 @@ enum class VMOp : uint8_t {
     /// Numeric only: the VM has no string type, so the text variants of these
     /// blocks stay unsupported rather than silently printing something else.
     SERIAL_NUM    = 0xFC,
+
+    /// DHT, split exactly like the blocks: a polling statement refreshes the
+    /// cache, a value block reads it. Matching the Arduino generator matters —
+    /// it writes into globals for the same reason, because a DHT conversion is
+    /// slow and must not happen once per read inside a loop.
+    ///   DHT_POLL: pop port(1..4)            — refresh that port's cache
+    ///   DHT_GET : pop param(0=temp,1=hum), port -> push cached value
+    DHT_POLL      = 0xFD,
+    DHT_GET       = 0x08,
+    /// Line tracer commands: pop arg, fn, port.
+    ///   fn 0 = setThreshold(arg)   1 = startCalibration   2 = endCalibration
+    LT_CMD        = 0xFE,
+    /// pop fn, port(0=Serial,1=Serial1) -> push. fn 0 = available, 1 = read.
+    SERIAL_IN     = 0xFF,
 };
 
 /**
@@ -315,6 +329,10 @@ private:
     /// unreset timer simply reads uptime, which is what the Arduino generator
     /// does too.
     uint32_t _timers[4] = { 0, 0, 0, 0 };
+    /// DHT cache, one temperature and one humidity per D port. Costs 16 bytes
+    /// so that a value block never triggers a conversion.
+    int16_t _dhtT[4] = { 0, 0, 0, 0 };
+    int16_t _dhtH[4] = { 0, 0, 0, 0 };
 
     uint16_t _callStack[CALL_STACK_SIZE];
     uint8_t  _csp;

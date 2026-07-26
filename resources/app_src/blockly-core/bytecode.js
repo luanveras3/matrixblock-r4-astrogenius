@@ -70,6 +70,7 @@ Blockly.BytecodeVM.OPS = {
     MAP: 0xF2, I2C_LASER: 0xF3, I2C_COLOR: 0xF4,
     OLED_TEXTSIZE: 0xC4, OLED_TEXTCOLOR: 0xC5, I2C_READ: 0xF5, I2C_BEGIN: 0xF6, PORT_DREAD: 0xF7, PORT_AREAD: 0xF8, PORT_DWRITE: 0xF9,
     TIMER_READ: 0xFA, TIMER_RESET: 0xFB, SERIAL_NUM: 0xFC,
+    DHT_POLL: 0xFD, DHT_GET: 0x08, LT_CMD: 0xFE, SERIAL_IN: 0xFF,
 };
 
 // --- Per-compile state ------------------------------------------------------

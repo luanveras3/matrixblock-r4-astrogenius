@@ -462,4 +462,44 @@ goog.require('Blockly.BytecodeVM');
     // Serial1.begin is a no-op: the VM cannot reconfigure a port the runtime
     // shares, and the default baud is what the blocks assume anyway.
     G['mini_Serial1_begin']   = function () { return ''; };
+
+    // --- Round 4e: DHT, line tracer commands, Serial input -------------------
+    // DHT keeps the blocks' own split: the polling statement refreshes a cache
+    // in the runtime, the value block reads it. Collapsing them into one live
+    // read would be simpler and wrong — a DHT conversion takes a quarter of a
+    // second, and a value block inside a loop would stall the program.
+    G['mini_MXDHT_Polling'] = function () {
+        return G.pushInt(portNum(this.getFieldValue('PIN'), this.type, 'D')) +
+               G.byte(G.OPS.DHT_POLL);
+    };
+    G['mini_MXDHT'] = function () {
+        const parm = String(this.getFieldValue('PARM') || '').toLowerCase();
+        const isHum = /hum/.test(parm);
+        return [G.pushInt(portNum(this.getFieldValue('PIN'), this.type, 'D')) +
+                G.pushInt(isHum ? 1 : 0) + G.byte(G.OPS.DHT_GET), G.ORDER_ATOMIC];
+    };
+    G['mini_DHT11get'] = G['mini_MXDHT'];
+
+    function ltCmd(block, fn, arg) {
+        return G.pushInt(i2cPort(block.getFieldValue('PIN'), block.type)) +
+               G.pushInt(fn) + arg + G.byte(G.OPS.LT_CMD);
+    }
+    G['mini_i2c_mxlinetracer_setthreshold'] = function () {
+        const v = G.valueToCode(this, 'VAL', G.ORDER_ATOMIC) || G.pushInt(50);
+        return ltCmd(this, 0, v);
+    };
+    G['mini_i2c_mxlinetracer_calibration'] = function () {
+        // The block picks start or end; anything else we treat as start.
+        const end = /end|fim|stop/i.test(String(this.getFieldValue('MODE') || ''));
+        return ltCmd(this, end ? 2 : 1, G.pushInt(0));
+    };
+
+    function serialIn(block, port, fn) {
+        return [G.pushInt(port) + G.pushInt(fn) + G.byte(G.OPS.SERIAL_IN),
+                G.ORDER_ATOMIC];
+    }
+    G['mini_Serial_available']  = function () { return serialIn(this, 0, 0); };
+    G['mini_Serial_read']       = function () { return serialIn(this, 0, 1); };
+    G['mini_Serial1_available'] = function () { return serialIn(this, 1, 0); };
+    G['mini_Serial1_read']      = function () { return serialIn(this, 1, 1); };
 })();
