@@ -199,6 +199,17 @@ counterpart.
   hub) and the BTN_UP rescue of a deliberately-blocking sketch — note that
   item 1 above now gives us the perfect blocking sketch for it.
 
+## 4a. Port sensors — confirmed on real hardware 2026-07-25
+
+Sampled the running VM while the bench was operated by hand: switch on D1
+toggled 0 -> 1 -> 0 over four presses; the M1 encoder tracked -387 -> -437 ->
+-396, following the shaft both ways. Potentiometer steady at 537-539, PIR at 0
+— both consistent with nothing touching them. Earlier in the same setup the
+PIR toggled 1 -> 0 on motion and an I2C laser read a real 23-25 mm.
+
+The switch reads from the **L** pin. An older note said R; the Arduino
+generator has always emitted `getL()` and the hardware agrees.
+
 ## 4b. Probes MUST answer the app's dialogs
 
 The app raises SweetAlert2 dialogs a human dismisses without thinking and a
