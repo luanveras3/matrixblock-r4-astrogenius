@@ -425,4 +425,41 @@ goog.require('Blockly.BytecodeVM');
     G['mini_MXWaterLevel_getLevel']       = function () { return portAnalog(this, 0); };
     G['mini_Grove_DIget']                 = function () { return portDigital(this, 0); };
     G['mini_Grove_AIget']                 = function () { return portAnalog(this, 0); };
+
+    // --- Round 4d: timers, digital output, numeric Serial --------------------
+    G['mini_Grove_DOset'] = function () {
+        const port = portNum(this.getFieldValue('PIN'), this.type, 'D');
+        const v = G.valueToCode(this, 'VAL', G.ORDER_ATOMIC) || G.pushInt(0);
+        return G.pushInt(port) + G.pushInt(0) + v + G.byte(G.OPS.PORT_DWRITE);
+    };
+
+    // The Arduino generator keeps one timer_<id> variable per timer; the VM
+    // keeps four slots in the runtime instead, same semantics.
+    function timerId(block) {
+        const n = parseInt(String(block.getFieldValue('TIMER') || '1'), 10) || 1;
+        return Math.max(0, Math.min(3, n - 1));
+    }
+    G['mini_timer_read']  = function () {
+        return [G.pushInt(timerId(this)) + G.byte(G.OPS.TIMER_READ), G.ORDER_ATOMIC];
+    };
+    G['mini_timer_reset'] = function () {
+        return G.pushInt(timerId(this)) + G.byte(G.OPS.TIMER_RESET);
+    };
+
+    // Numeric print only. The VM has a single int32 value type, so the text
+    // forms of these blocks stay unsupported rather than printing something
+    // that merely looks right — a silently wrong number is worse than a
+    // skipped block the student is told about.
+    function serialNum(block, port, newline) {
+        const v = G.valueToCode(block, 'VAL', G.ORDER_ATOMIC);
+        if (!v) { G.warn(block.type, 'only numeric values are supported by the VM'); return ''; }
+        return v + G.pushInt(port) + G.pushInt(newline) + G.byte(G.OPS.SERIAL_NUM);
+    }
+    G['mini_Serial_print']    = function () { return serialNum(this, 0, 0); };
+    G['mini_Serial_println']  = function () { return serialNum(this, 0, 1); };
+    G['mini_Serial1_print']   = function () { return serialNum(this, 1, 0); };
+    G['mini_Serial1_println'] = function () { return serialNum(this, 1, 1); };
+    // Serial1.begin is a no-op: the VM cannot reconfigure a port the runtime
+    // shares, and the default baud is what the blocks assume anyway.
+    G['mini_Serial1_begin']   = function () { return ''; };
 })();

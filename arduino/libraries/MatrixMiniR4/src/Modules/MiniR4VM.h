@@ -203,6 +203,20 @@ enum class VMOp : uint8_t {
     ///   PORT_AREAD: pop side(0=L,1=R), port(1..3) -> push 0..1023
     PORT_DREAD    = 0xF7,
     PORT_AREAD    = 0xF8,
+
+    /// pop side, port, value(0/1) -> drive a MATRIX digital port.
+    PORT_DWRITE   = 0xF9,
+    /// pop id(0..3) -> push milliseconds since that timer was reset.
+    /// Four software timers, mirroring the Arduino generator's timer_N
+    /// variables. Costs 16 bytes of static RAM, which is affordable where a
+    /// new driver object would not have been.
+    TIMER_READ    = 0xFA,
+    /// pop id(0..3) -> reset that timer to now.
+    TIMER_RESET   = 0xFB,
+    /// pop newline(0/1), port(0=Serial,1=Serial1), value -> print a number.
+    /// Numeric only: the VM has no string type, so the text variants of these
+    /// blocks stay unsupported rather than silently printing something else.
+    SERIAL_NUM    = 0xFC,
 };
 
 /**
@@ -297,6 +311,10 @@ private:
     uint8_t _sp;
 
     int32_t _vars[VAR_COUNT];
+    /// Four software timers (TIMER_READ/TIMER_RESET). Zero-initialised, so an
+    /// unreset timer simply reads uptime, which is what the Arduino generator
+    /// does too.
+    uint32_t _timers[4] = { 0, 0, 0, 0 };
 
     uint16_t _callStack[CALL_STACK_SIZE];
     uint8_t  _csp;

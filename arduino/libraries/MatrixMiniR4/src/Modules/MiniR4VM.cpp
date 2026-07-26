@@ -656,6 +656,45 @@ MiniR4VM::Result MiniR4VM::execIO(VMOp op)
             return push(out) ? Result::OK : Result::ERR_STACK_OVERFLOW;
         }
 
+        case VMOp::PORT_DWRITE: {   // pop value, side, port
+            int32_t value, side, port;
+            if (!pop(value) || !pop(side) || !pop(port))
+                return Result::ERR_STACK_UNDERFLOW;
+            const bool r = (side != 0);
+            const uint8_t v = value ? 1 : 0;
+            switch ((uint8_t)port) {
+                case 1: r ? MiniR4.D1.setR(v) : MiniR4.D1.setL(v); break;
+                case 2: r ? MiniR4.D2.setR(v) : MiniR4.D2.setL(v); break;
+                case 3: r ? MiniR4.D3.setR(v) : MiniR4.D3.setL(v); break;
+                case 4: r ? MiniR4.D4.setR(v) : MiniR4.D4.setL(v); break;
+            }
+            return Result::OK;
+        }
+
+        case VMOp::TIMER_READ: {
+            int32_t id;
+            if (!pop(id)) return Result::ERR_STACK_UNDERFLOW;
+            const uint8_t i = (uint8_t)id & 0x03;
+            return push((int32_t)(millis() - _timers[i]))
+                   ? Result::OK : Result::ERR_STACK_OVERFLOW;
+        }
+
+        case VMOp::TIMER_RESET: {
+            int32_t id;
+            if (!pop(id)) return Result::ERR_STACK_UNDERFLOW;
+            _timers[(uint8_t)id & 0x03] = millis();
+            return Result::OK;
+        }
+
+        case VMOp::SERIAL_NUM: {   // pop newline, port, value
+            int32_t nl, port, value;
+            if (!pop(nl) || !pop(port) || !pop(value))
+                return Result::ERR_STACK_UNDERFLOW;
+            if (port == 1) { Serial1.print(value); if (nl) Serial1.println(); }
+            else           { Serial.print(value);  if (nl) Serial.println();  }
+            return Result::OK;
+        }
+
         case VMOp::PORT_DREAD: {   // pop side, port -> push 0/1
             int32_t side, port;
             if (!pop(side) || !pop(port)) return Result::ERR_STACK_UNDERFLOW;
