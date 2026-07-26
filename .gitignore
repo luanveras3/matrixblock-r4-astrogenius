@@ -32,6 +32,12 @@
 !tools/bin2ota.js
 !tools/bin2ota.test.js
 !tools/wifi_wrapper.test.js
+!tools/run_tests.js
+# VM bytecode suites, recovered from the BLE branch before it was archived.
+!tools/vm_assembler.test.js
+!tools/vm_handlers.test.js
+!tools/vm_hardware_handlers.test.js
+!tools/vm_procedures.test.js
 !tools/bytecode_map.test.js
 !tools/hubctl.js
 # Probe scripts stay untracked on purpose, but this one is shared
