@@ -126,16 +126,16 @@
         f.title = window.MBR4Version.tooltip();
 
         // The way out of the beta, right under the line that says it is one.
-        if (window.MBR4Channel && window.MBR4Channel.available) {
+        if (window.MBR4Versions && window.MBR4Versions.available) {
             const a = document.createElement('a');
             a.className = 'astro-nav-channel';
             a.href = '#';
-            a.textContent = window.MBR4Channel.label();
+            a.textContent = window.MBR4Versions.label();
             a.style.cssText = 'display:block;margin-top:4px;color:#4a90d9;text-decoration:none;';
             a.addEventListener('click', (ev) => {
                 ev.preventDefault();
                 panelEl.style.display = 'none';
-                window.MBR4Channel.switchToStable();
+                window.MBR4Versions.open();
             });
             f.appendChild(a);
         }

@@ -43,8 +43,8 @@ const PATCHES = [
   // Single source of truth for "which version am I running": the fork's own
   // version and channel, plus the upstream release it is built on.
   ['blockly-core/version.js',                         'blockly-core/version.js'],
-  // One-click return to the official build (and a Desktop shortcut back).
-  ['blockly-core/channel.js',                         'blockly-core/channel.js'],
+  // Side-by-side app builds: list them, switch with one click.
+  ['blockly-core/versions.js',                        'blockly-core/versions.js'],
   ['blockly-core/navmenu.js',                         'blockly-core/navmenu.js'],
   // Hub configuration over the USB cable — the path that does not depend on
   // the network being configured.

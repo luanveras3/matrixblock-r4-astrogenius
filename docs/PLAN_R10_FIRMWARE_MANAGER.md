@@ -177,47 +177,75 @@ Worth doing: for a classroom, "put it back the way it was" in one click — with
 the fork one click away again — is the difference between trying a beta and not
 risking it. Not release-blocking.
 
-### Channel switch — SHIPPED
+### Versions menu — SHIPPED
 
-`blockly-core/channel.js`. "Switch to the official version" in the AstroGenius
-dropdown, under the line that says this is a beta.
+`blockly-core/versions.js`. A "Versions…" entry in the AstroGenius dropdown
+opens a list of the builds installed side by side; picking one closes the app
+and reopens it on that build.
 
-Sequence: park the current build → spawn a detached PowerShell helper → ask the
-app to close → helper waits for the process to exit → copy → relaunch.
+The list is deliberately **not** a scan of resources/. This install has six
+archives and four are old fork builds; listing them produced a menu of
+near-identical rows inviting someone to switch to a build nobody can identify.
+It shows exactly three things: the build running now, the official one if a
+pristine archive is found, and whatever `versions.json` names.
 
-Four things learned building it, each of which broke a working assumption:
+`versions.json` is the extension point, and needs no code change:
+
+```json
+{ "versions": [
+    { "name": "MATRIXblock Mini R4", "vendor": "MATRIX Robotics",
+      "channel": "release candidate", "file": "D:/builds/1.0.9-rc2.asar" } ] }
+```
+
+`file` is the only required field — relative to resources/ or absolute. The
+version number is read out of the archive, so a label can never disagree with
+what is actually installed.
+
+#### Five failures, each found by testing and none by reasoning
+
+The first version of this shipped **not working at all**, and the reasons are
+worth keeping because every one of them is silent.
 
 1. **Plain `fs` cannot touch `app.asar`.** Electron intercepts any path
-   containing `.asar` and serves it as a directory, so `copyFileSync` on it
-   returns ENOENT. `original-fs` is the unpatched module for exactly this.
-2. **A `.bak` name proves nothing.** The bench install had six archives; four
-   were old fork builds, and the first version of the pristine check passed all
-   of them. Detection now reads the archive: fork-only modules in
-   `blockly-core`, and — decisive, because the earliest fork versions added no
-   file there — the AstroGenius brand in `views/main.html`. With that, exactly
-   one of the six classifies as pristine.
-3. **Do not guess where the Desktop is.** It is localised and usually
-   redirected into OneDrive. A guessed path put the return shortcut in a legacy
-   junction the user would never have opened. PowerShell resolves it with
-   `[Environment]::GetFolderPath("Desktop")`, so the helper places the shortcut
-   rather than the renderer.
-4. **A tidy extra copy cost 108 MB.** An early draft parked pristine under a
-   fixed name as well. The `.bak` it copied from is exactly as likely to
-   survive as the copy, so the source is now used where it sits.
+   containing `.asar` and serves it as a directory, so `copyFileSync` returns
+   ENOENT. `original-fs` is the unpatched module for this.
+2. **`window.close()` cannot close this app.** `main.js` does
+   `win.on('close', e => { send("close-app"); e.preventDefault(); })` — the
+   close is *always* cancelled. The real exit is
+   `ipcRenderer.send('close-app')`. The first build called `window.close()`,
+   so the app never quit and the helper waited three minutes for a process
+   that was never leaving, then correctly did nothing.
+3. **`spawn(..., { detached: true })` creates a process that never executes.**
+   Measured, not guessed: the identical script runs with `detached: false` and
+   runs again through `cmd /c start`, so detachment is what breaks it in this
+   renderer. But detachment is exactly what is needed, since the app is about
+   to exit — hence `start`.
+4. **PowerShell `-File` mis-binds arguments containing spaces**, and the
+   executable is `MATRIXblock Mini R4.exe`. Binding failed before the first
+   statement, so neither the log nor the ready-marker appeared and there was
+   nothing at all to diagnose. Every value is now baked into the script.
+5. **A `.bak` name proves nothing.** Four of the six archives here are old fork
+   builds, and the first pristine check passed all of them — the feature would
+   have reinstalled the fork and called it official. Detection reads the
+   archive: fork-only modules, plus the brand in `main.html`, which is what
+   catches early builds that added no file to `blockly-core`.
 
-Safety properties, both deliberate: if the user cancels the close prompt the
-helper times out and changes nothing, and nothing is ever deleted — the build
-being left is copied aside first, so the trip is always round.
+Two of these produce **no error anywhere** — no exception, no log line, no
+dialog. That is why the helper now writes `switch.log` next to itself and
+signals readiness with a file the app waits for: if the helper cannot start,
+the app says so and stays open instead of closing for nothing.
 
-Verified end to end on the bench: hashes confirmed the active archive became
-pristine, the app relaunched on the official build, the shortcut appeared on
-the real Desktop, and running it restored the fork.
+#### The return trip
 
-**The return trip cannot live in the app** — once the official build is
-running there is no AstroGenius UI left to offer it. Hence the Desktop
-shortcut. That is a real constraint, not a shortcut in the design.
+Once another build is running there is no AstroGenius UI left to offer a way
+back, so the helper places a `Back to AstroGenius.cmd` on the Desktop — and
+asks Windows where the Desktop is rather than guessing, because it is
+localised and usually redirected into OneDrive. A guessed path put the file in
+a legacy junction the user would never have opened. It is written only after
+the copy succeeds, so a switch that did not happen leaves nothing behind.
 
----
+Verified end to end by hash, both directions: fork → official (shortcut placed
+on the real Desktop, app relaunched) → fork.
 
 ## 8. Project file compatibility, both directions
 

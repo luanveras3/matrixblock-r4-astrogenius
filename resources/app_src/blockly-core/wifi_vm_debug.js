@@ -487,6 +487,21 @@
     }
 
     // --- Nav button ----------------------------------------------------------
+    /*
+     * WITHDRAWN 2026-07-26. The live block debugger is not reliable enough to
+     * put in front of a classroom, so its entry points — this button and the
+     * right-click "toggle breakpoint" item — are not installed.
+     *
+     * The machinery below is deliberately left intact and reachable from the
+     * console via window.MBR4VMDebug, because the problem is in the experience,
+     * not in the protocol: the pc stream, the block map and the breakpoint
+     * round-trip all work. Removing the code would mean rebuilding it from
+     * nothing when we come back to this.
+     *
+     * To try it in a session: window.MBR4VMDebug._install()
+     */
+    const UI_ENABLED = false;
+
     function installButton() {
         const anchor = document.getElementById('vmUploadNavLink');
         if (!anchor) return;
@@ -518,6 +533,8 @@
             if (enabled) pushBreakpoints();
             renderPanel();
         },
+        /** Bring the withdrawn UI up by hand, for a debugging session. */
+        _install: () => { installContextMenu(); installButton(); },
         _toggle: togglePanel,
         _show:   showPanel,
         _setEnabled: setEnabled,
@@ -533,9 +550,12 @@
         // The hub forgets debug state when the socket drops, so re-arm on
         // every reconnect rather than assuming it stuck.
         window.MBR4Hud.onConnect(() => { armRobot(); renderPanel(); });
-        installContextMenu();
-        installButton();
-        console.log('[VMDbg] wifi_vm_debug.js module loaded');
+        if (UI_ENABLED) {
+            installContextMenu();
+            installButton();
+        }
+        console.log('[VMDbg] wifi_vm_debug.js module loaded' +
+                    (UI_ENABLED ? '' : ' (UI withdrawn — see the note above)'));
     }
 
     if (document.readyState === 'loading') {
@@ -546,5 +566,5 @@
     setTimeout(boot, 1500);
     setTimeout(boot, 3000);
     setTimeout(boot, 5000);
-    setTimeout(installButton, 6000);
+    if (UI_ENABLED) setTimeout(installButton, 6000);
 })();
